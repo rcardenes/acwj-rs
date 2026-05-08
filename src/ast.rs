@@ -47,6 +47,10 @@ impl AstNode {
 }
 
 impl IndexableNode for AstNode {
+    fn is_leaf(&self) -> bool {
+        self.left_index.is_none() && self.right_index.is_none()
+    }
+
     fn get_left_index(&self) -> Option<usize> {
         self.left_index
     }

@@ -1,4 +1,5 @@
 pub trait IndexableNode {
+    fn is_leaf(&self) -> bool;
     fn get_left_index(&self) -> Option<usize>;
     fn get_right_index(&self) -> Option<usize>;
     fn set_leaves(&mut self, left: Option<usize>, right: Option<usize>);
@@ -19,6 +20,10 @@ impl<T> Tree<T>
             root: 0,
             nodes: vec![node],
         }
+    }
+
+    pub fn is_leaf(&self) -> bool {
+        self.get_root().is_leaf()
     }
 
     pub fn append(&mut self, node: T, new_root: bool) -> usize {
@@ -62,6 +67,14 @@ impl<T> Tree<T>
         &self.nodes[self.root]
     }
 
+    pub fn get_left(&self) -> Option<&T> {
+        self.get_root_or_node(self.nodes[self.root].get_left_index())
+    }
+
+    pub fn get_right(&self) -> Option<&T> {
+        self.get_root_or_node(self.nodes[self.root].get_right_index())
+    }
+
     pub fn get_node(&self, idx: usize) -> Option<&T> {
         if idx < self.nodes.len() {
             Some(&self.nodes[idx])
@@ -88,6 +101,7 @@ mod tests {
     }
 
     impl IndexableNode for StubNode {
+        fn is_leaf(&self) -> bool { self.left.is_none() && self.right.is_none() }
         fn get_left_index(&self) -> Option<usize> { self.left }
         fn get_right_index(&self) -> Option<usize> { self.right }
         fn set_leaves(&mut self, left: Option<usize>, right: Option<usize>) {

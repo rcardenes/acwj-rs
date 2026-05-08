@@ -1,8 +1,10 @@
+pub mod ast;
+pub mod cg;
+pub mod expr;
+pub mod cgen;
+pub mod interp;
 pub mod scan;
 pub mod tree;
-pub mod ast;
-pub mod interp;
-pub mod expr;
 
 pub use scan::{Scanner, Token};
 pub use expr::binexpr;
