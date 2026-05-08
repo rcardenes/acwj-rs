@@ -1,4 +1,7 @@
-use std::io::{BufReader, Read};
+use std::{
+    cell::RefCell,
+    io::{BufReader, Read}, ops::AddAssign
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
@@ -11,9 +14,9 @@ pub enum Token {
 
 #[derive(Debug)]
 pub struct Scanner<T> {
-    buffer: BufReader<T>,
-    putback: Option<char>,
-    line: usize,
+    buffer: RefCell<BufReader<T>>,
+    putback: RefCell<Option<char>>,
+    line: RefCell<usize>,
 }
 
 impl<T> Scanner<T>
@@ -21,42 +24,45 @@ where T: Read
 {
     pub fn new(reader: T) -> Self {
         Scanner {
-            buffer: BufReader::new(reader),
-            putback: None,
-            line: 1,
+            buffer: BufReader::new(reader).into(),
+            putback: None.into(),
+            line: 1.into(),
         }
     }
 
-    pub fn scan(&mut self) -> Option<Token> {
+    pub fn scan(&self) -> Option<Token> {
         match self.skip()? {
             '+' => Some(Token::Plus),
             '-' => Some(Token::Minus),
             '*' => Some(Token::Star),
             '/' => Some(Token::Slash),
-            c if c.is_digit(10) => {
+            c if c.is_ascii_digit() => {
                 Some(Token::IntLit(self.scanint(c)))
             }
             c => {
-                panic!("Unrecognised character '{}' on line {}", c, self.line);
+                panic!("Unrecognised character '{}' on line {}", c, self.line.borrow());
             }
         }
     }
 
-    fn putback(&mut self, c: char) {
-        self.putback = Some(c);
+    pub fn get_line(&self) -> usize {
+        *self.line.borrow()
+    }
+
+    fn putback(&self, c: char) {
+        self.putback.borrow_mut().replace(c);
     } 
 
-    fn next(&mut self) -> Option<char> {
-        if let Some(c) = self.putback.take() {
+    fn next(&self) -> Option<char> {
+        if let Some(c) = self.putback.borrow_mut().take() {
             Some(c)
         } else {
             let mut buf = [0; 1];
 
-            match self.buffer.read_exact(&mut buf) {
+            match self.buffer.borrow_mut().read_exact(&mut buf) {
                 Ok(_) => {
                     if buf[0] == b'\n' {
-                        self.line += 1;
-                    } else {
+                        self.line.borrow_mut().add_assign(1)
                     }
                     Some(buf[0] as char)
                 }
@@ -65,7 +71,7 @@ where T: Read
         }
     }
 
-    fn skip(&mut self) -> Option<char> {
+    fn skip(&self) -> Option<char> {
         while let Some(c) = self.next() {
             if !c.is_whitespace() {
                 return Some(c);
@@ -75,11 +81,11 @@ where T: Read
         None
     }
 
-    fn scanint(&mut self, first: char) -> i64 {
+    fn scanint(&self, first: char) -> i64 {
         let mut value = first.to_digit(10).unwrap() as i64;
 
         while let Some(c) = self.next() {
-            if c.is_digit(10) {
+            if c.is_ascii_digit() {
                 value = value * 10 + c.to_digit(10).unwrap() as i64;
             } else {
                 self.putback(c);
@@ -112,13 +118,87 @@ where T: Read
 }
 
 #[cfg(test)]
-
 mod tests {
     use std::path::PathBuf;
+    use std::io::Cursor;
     use rstest::rstest;
-        // assert_eq!(tokens, expected);
 
     use super::*;
+
+    fn scan_all_mem(input: &str) -> Vec<Token> {
+        let scanner = Scanner::new(Cursor::new(input.as_bytes().to_vec()));
+        let mut tokens = vec![];
+        while let Some(tok) = scanner.scan() {
+            tokens.push(tok);
+        }
+        tokens
+    }
+
+    // --- in-memory unit tests ---
+
+    #[test]
+    fn scan_plus() {
+        assert_eq!(scan_all_mem("+"), vec![Token::Plus]);
+    }
+
+    #[test]
+    fn scan_minus() {
+        assert_eq!(scan_all_mem("-"), vec![Token::Minus]);
+    }
+
+    #[test]
+    fn scan_star() {
+        assert_eq!(scan_all_mem("*"), vec![Token::Star]);
+    }
+
+    #[test]
+    fn scan_slash() {
+        assert_eq!(scan_all_mem("/"), vec![Token::Slash]);
+    }
+
+    #[test]
+    fn scan_single_digit_intlit() {
+        assert_eq!(scan_all_mem("7"), vec![Token::IntLit(7)]);
+    }
+
+    #[test]
+    fn scan_multidigit_intlit() {
+        assert_eq!(scan_all_mem("1234"), vec![Token::IntLit(1234)]);
+    }
+
+    #[test]
+    fn scan_skips_leading_and_trailing_whitespace() {
+        assert_eq!(scan_all_mem("  +  "), vec![Token::Plus]);
+    }
+
+    #[test]
+    fn scan_returns_none_at_eof() {
+        let scanner = Scanner::new(Cursor::new(b"".to_vec()));
+        assert!(scanner.scan().is_none());
+    }
+
+    #[test]
+    fn scan_tracks_newlines() {
+        let scanner = Scanner::new(Cursor::new(b"1\n2".to_vec()));
+        scanner.scan(); // reads '1', then '\n' (line → 2), putbacks '\n'
+        assert_eq!(scanner.get_line(), 2);
+        scanner.scan(); // reads putback '\n', then '2'
+        assert_eq!(scanner.get_line(), 2);
+    }
+
+    #[test]
+    #[should_panic]
+    fn scan_panics_on_unknown_character() {
+        scan_all_mem("@");
+    }
+
+    #[test]
+    fn scan_sequence_of_mixed_tokens() {
+        assert_eq!(
+            scan_all_mem("1 + 2"),
+            vec![Token::IntLit(1), Token::Plus, Token::IntLit(2)],
+        );
+    }
 
     static TEST_DATA_FILES: &[&str] = &[
         "input01",
@@ -144,13 +224,23 @@ mod tests {
     #[case::input01(get_test_file(TEST_DATA_FILES[0]), EXPECTED_TOKENS[0])]
     #[case::input02(get_test_file(TEST_DATA_FILES[1]), EXPECTED_TOKENS[1])]
     #[case::input03(get_test_file(TEST_DATA_FILES[2]), EXPECTED_TOKENS[2])]
-    #[case::input04(get_test_file(TEST_DATA_FILES[3]), EXPECTED_TOKENS[3])]
-    fn test_scanner(#[case] file: PathBuf, #[case] expected: &[Token]) {
+    fn test_scanner_success(#[case] file: PathBuf, #[case] expected: &[Token]) {
         let file = std::fs::File::open(file).expect("Failed to open test file");
         let scanner = Scanner::new(file);
 
-        let tokens: Vec<Token> = ScannerIter::new(scanner).into_iter().collect();
+        let tokens: Vec<Token> = ScannerIter::new(scanner).collect();
+        eprintln!("{:?}", tokens);
 
         assert_eq!(tokens, expected.to_vec());
+    }
+
+    #[rstest]
+    #[case::input04(get_test_file(TEST_DATA_FILES[3]))]
+    #[should_panic]
+    fn test_scanner_fails(#[case] file: PathBuf) {
+        let file = std::fs::File::open(file).expect("Failed to open test file");
+        let scanner = Scanner::new(file);
+
+        let _: Vec<Token> = ScannerIter::new(scanner).collect();
     }
 }
