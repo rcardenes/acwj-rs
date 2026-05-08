@@ -1,3 +1,3 @@
 pub mod scan;
 
-pub use scan::Scanner;
+pub use scan::{Scanner, Token};

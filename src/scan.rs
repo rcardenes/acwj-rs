@@ -36,7 +36,9 @@ where T: Read
             c if c.is_digit(10) => {
                 Some(Token::IntLit(self.scanint(c)))
             }
-            _ => None,
+            c => {
+                panic!("Unrecognised character '{}' on line {}", c, self.line);
+            }
         }
     }
 
