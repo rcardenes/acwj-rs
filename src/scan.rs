@@ -15,7 +15,8 @@ pub enum Token {
 #[derive(Debug)]
 pub struct Scanner<T> {
     buffer: RefCell<BufReader<T>>,
-    putback: RefCell<Option<char>>,
+    putback_char: RefCell<Option<char>>,
+    putback_token: RefCell<Option<Token>>,
     line: RefCell<usize>,
 }
 
@@ -25,22 +26,27 @@ where T: Read
     pub fn new(reader: T) -> Self {
         Scanner {
             buffer: BufReader::new(reader).into(),
-            putback: None.into(),
+            putback_char: None.into(),
+            putback_token: None.into(),
             line: 1.into(),
         }
     }
 
     pub fn scan(&self) -> Option<Token> {
-        match self.skip()? {
-            '+' => Some(Token::Plus),
-            '-' => Some(Token::Minus),
-            '*' => Some(Token::Star),
-            '/' => Some(Token::Slash),
-            c if c.is_ascii_digit() => {
-                Some(Token::IntLit(self.scanint(c)))
-            }
-            c => {
-                panic!("Unrecognised character '{}' on line {}", c, self.line.borrow());
+        if let Some(t) = self.putback_token.borrow_mut().take() {
+            Some(t)
+        } else {
+            match self.skip()? {
+                '+' => Some(Token::Plus),
+                '-' => Some(Token::Minus),
+                '*' => Some(Token::Star),
+                '/' => Some(Token::Slash),
+                c if c.is_ascii_digit() => {
+                    Some(Token::IntLit(self.scanint(c)))
+                }
+                c => {
+                    panic!("Unrecognised character '{}' on line {}", c, self.line.borrow());
+                }
             }
         }
     }
@@ -49,12 +55,23 @@ where T: Read
         *self.line.borrow()
     }
 
-    fn putback(&self, c: char) {
-        self.putback.borrow_mut().replace(c);
+    // PUTBACK FUNCTIONS
+    //
+    //  Characters are never seen outside the scanner. Only the
+    //  scanner itself can put chars back, the function is not
+    //  public.
+    fn putback_char(&self, c: char) {
+        self.putback_char.borrow_mut().replace(c);
+    } 
+
+    //  Tokens can be put back by users of the Scanner struct,
+    //  thus this needs to be public.
+    pub fn putback_token(&self, t: Token) {
+        self.putback_token.borrow_mut().replace(t);
     } 
 
     fn next(&self) -> Option<char> {
-        if let Some(c) = self.putback.borrow_mut().take() {
+        if let Some(c) = self.putback_char.borrow_mut().take() {
             Some(c)
         } else {
             let mut buf = [0; 1];
@@ -88,32 +105,12 @@ where T: Read
             if c.is_ascii_digit() {
                 value = value * 10 + c.to_digit(10).unwrap() as i64;
             } else {
-                self.putback(c);
+                self.putback_char(c);
                 break;
             }
         }
 
         value
-    }
-}
-
-struct ScannerIter<T> {
-    scanner: Scanner<T>,
-}
-
-impl<T> ScannerIter<T> {
-    fn new(scanner: Scanner<T>) -> Self {
-        ScannerIter { scanner }
-    }
-}
-
-impl <T> Iterator for ScannerIter<T>
-where T: Read
-{
-    type Item = Token;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.scanner.scan()
     }
 }
 
@@ -124,6 +121,26 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    struct ScannerIter<T> {
+        scanner: Scanner<T>,
+    }
+
+    impl<T> ScannerIter<T> {
+        fn new(scanner: Scanner<T>) -> Self {
+            ScannerIter { scanner }
+        }
+    }
+
+    impl <T> Iterator for ScannerIter<T>
+    where T: Read
+    {
+        type Item = Token;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            self.scanner.scan()
+        }
+    }
 
     fn scan_all_mem(input: &str) -> Vec<Token> {
         let scanner = Scanner::new(Cursor::new(input.as_bytes().to_vec()));
@@ -180,9 +197,9 @@ mod tests {
     #[test]
     fn scan_tracks_newlines() {
         let scanner = Scanner::new(Cursor::new(b"1\n2".to_vec()));
-        scanner.scan(); // reads '1', then '\n' (line → 2), putbacks '\n'
+        scanner.scan(); // reads '1', then '\n' (line → 2), putback_chars '\n'
         assert_eq!(scanner.get_line(), 2);
-        scanner.scan(); // reads putback '\n', then '2'
+        scanner.scan(); // reads putback_char '\n', then '2'
         assert_eq!(scanner.get_line(), 2);
     }
 

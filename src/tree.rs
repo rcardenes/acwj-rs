@@ -32,16 +32,18 @@ impl<T> Tree<T>
         idx
     }
 
-    pub fn new_root_with_right_idx(&mut self, mut node: T, idx: usize) -> usize {
+    pub fn new_root_with_right_idx(mut self, mut node: T, idx: usize) -> Self {
         let old_root = self.root;
         node.set_leaves(Some(old_root), Some(idx));
-        self.append(node, true)
+        self.append(node, true);
+        self
     }
 
-    pub fn new_root_with_left_idx(&mut self, mut node: T, idx: usize) -> usize {
+    pub fn new_root_with_left_idx(mut self, mut node: T, idx: usize) -> Self {
         let old_root = self.root;
         node.set_leaves(Some(idx), Some(old_root));
-        self.append(node, true)
+        self.append(node, true);
+        self
     }
 
     pub fn concat(self, other: Tree<T>) -> (Tree<T>, usize) {
@@ -153,7 +155,7 @@ mod tests {
     fn new_root_with_right_idx_places_old_root_as_left_and_idx_as_right() {
         let mut tree = Tree::new(leaf());              // idx 0, root=0
         let idx1 = tree.append(leaf(), false);         // idx 1
-        tree.new_root_with_right_idx(branch(0, 0), idx1); // new root at idx 2
+        let tree = tree.new_root_with_right_idx(branch(0, 0), idx1); // new root at idx 2
         assert_eq!(tree.get_root().left, Some(0));     // old root
         assert_eq!(tree.get_root().right, Some(idx1));
     }
@@ -162,7 +164,7 @@ mod tests {
     fn new_root_with_left_idx_places_idx_as_left_and_old_root_as_right() {
         let mut tree = Tree::new(leaf());              // idx 0, root=0
         let idx1 = tree.append(leaf(), false);         // idx 1
-        tree.new_root_with_left_idx(branch(0, 0), idx1); // new root at idx 2
+        let tree = tree.new_root_with_left_idx(branch(0, 0), idx1); // new root at idx 2
         assert_eq!(tree.get_root().left, Some(idx1));
         assert_eq!(tree.get_root().right, Some(0));    // old root
     }

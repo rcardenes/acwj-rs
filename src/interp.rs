@@ -1,4 +1,8 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{
+    Context,
+    Result,
+    // bail,
+};
 use crate::{
     ast::{AstNode, Ast},
     tree::{Tree, IndexableNode},

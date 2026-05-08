@@ -1,8 +1,25 @@
+use anyhow::{Result, bail};
 use crate::{
     ast::{Ast, AstNode},
     scan::{Scanner, Token},
     tree::Tree,
 };
+
+type Precedence = u8;
+
+/// Return numeric precence for the different tokens, so that we
+/// can use it in a Pratt-style parser.
+pub fn op_precedence(line: usize, token: &Token) -> Result<Precedence> {
+    Ok(match token {
+        Token::Plus => 10,
+        Token::Minus => 10,
+        Token::Star => 20,
+        Token::Slash => 20,
+        Token::IntLit(_) => {
+            bail!("syntax error on line {}, token {:?}", line, token)
+        }
+    })
+}
 
 pub fn primary<T>(scanner: &Scanner<T>) -> AstNode
     where T: std::io::Read
@@ -13,7 +30,7 @@ pub fn primary<T>(scanner: &Scanner<T>) -> AstNode
     if let Some(token) = scanner.scan() {
         match token {
             Token::IntLit(val) => AstNode::make_leaf(Ast::IntLit(val)),
-            _ => panic!("syntax error on line {}", scanner.get_line())
+            _ => panic!("syntax error on line {}, token {:?}", scanner.get_line(), token)
         }
     } else {
         panic!("EOF reached, expected an integer")
@@ -32,23 +49,29 @@ pub fn arithop<T>(scanner: &Scanner<T>, token: Token) -> Ast
     }
 }
 
-pub fn binexpr<T>(scanner: &Scanner<T>) -> Tree<AstNode>
+// Return an AST tree whose root is a binary operator.
+// ptp is the precedence of the previous token
+pub fn binexpr<T>(scanner: &Scanner<T>, ptp: Precedence) -> Result<Tree<AstNode>>
     where T: std::io::Read
 {
-    let left = Tree::new(primary(scanner));
+    let mut left = Tree::new(primary(scanner));
 
-    if let Some(token) = scanner.scan() {
+    while let Some(token) = scanner.scan() {
+        let curr_prec = op_precedence(scanner.get_line(), &token)?;
+        if curr_prec <= ptp {
+            scanner.putback_token(token);
+            break;
+        }
+
         let node_type = arithop(scanner, token);
-        let right = binexpr(scanner);
+        let right = binexpr(scanner, curr_prec)?;
 
-        let (mut new_tree, right_root) = left.concat(right);
-        new_tree.new_root_with_right_idx(AstNode::make_leaf(node_type), right_root);
+        let (new_tree, right_root) = left.concat(right);
+        left = new_tree.new_root_with_right_idx(AstNode::make_leaf(node_type), right_root);
+            // AstNode::new(arithop(scanner, token), Some(left), Some(right));
+    }
 
-        new_tree
-    }
-    else {
-        left
-    }
+    Ok(left)
 }
 
 #[cfg(test)]
@@ -126,7 +149,7 @@ mod tests {
     #[test]
     fn binexpr_single_integer_returns_intlit_root() {
         let scanner = scanner_from("7");
-        let tree = binexpr(&scanner);
+        let tree = binexpr(&scanner, 0).expect("Expected a clean parsing");
         assert!(matches!(tree.get_root().op, Ast::IntLit(7)));
         assert!(tree.get_root().get_left_index().is_none());
     }
@@ -134,7 +157,7 @@ mod tests {
     #[test]
     fn binexpr_addition_builds_correct_tree() {
         let scanner = scanner_from("3 + 5");
-        let tree = binexpr(&scanner);
+        let tree = binexpr(&scanner, 0).expect("Expected a clean parsing");
         assert!(matches!(tree.get_root().op, Ast::Add));
         let left = tree.get_node(tree.get_root().get_left_index().unwrap()).unwrap();
         assert!(matches!(left.op, Ast::IntLit(3)));
@@ -143,12 +166,12 @@ mod tests {
     }
 
     #[test]
-    fn binexpr_is_right_recursive_not_left_associative() {
-        // "2 - 3 + 5" parses as Subtract(2, Add(3, 5)) due to right-recursion
+    fn binexpr_equal_precedence_is_left_associative() {
+        // "2 - 3 + 5" parses as Add(Subtract(2, 3), 5): last op is root, left subtree holds earlier ops
         let scanner = scanner_from("2 - 3 + 5");
-        let tree = binexpr(&scanner);
-        assert!(matches!(tree.get_root().op, Ast::Subtract));
-        let right_idx = tree.get_root().get_right_index().unwrap();
-        assert!(matches!(tree.get_node(right_idx).unwrap().op, Ast::Add));
+        let tree = binexpr(&scanner, 0).expect("Expected a clean parsing");
+        assert!(matches!(tree.get_root().op, Ast::Add));
+        let left_idx = tree.get_root().get_left_index().unwrap();
+        assert!(matches!(tree.get_node(left_idx).unwrap().op, Ast::Subtract));
     }
 }
