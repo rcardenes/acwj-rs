@@ -7,7 +7,7 @@ use crate::{
     tree::{IndexableNode, Tree},
 };
 
-fn gen_ast<T>(tree: &Tree<AstNode>, node_index: Option<usize>, code_gen: &mut CodeGenerator<T>) -> Result<Reg>
+pub fn gen_ast<T>(tree: &Tree<AstNode>, node_index: Option<usize>, code_gen: &mut CodeGenerator<T>) -> Result<Reg>
     where T: std::io::Write,
 {
     fn binary<F, T>(tree: &Tree<AstNode>, node: &AstNode, code_gen: &mut CodeGenerator<T>, func: F) -> Result<Reg>
@@ -28,6 +28,30 @@ fn gen_ast<T>(tree: &Tree<AstNode>, node_index: Option<usize>, code_gen: &mut Co
         Ast::Divide => binary(tree, root, code_gen, |cg, r1, r2| cg.div(r1, r2)),
         Ast::IntLit(val) => code_gen.load(val)
     }
+}
+
+pub fn gen_preamble<T>(code_gen: &mut CodeGenerator<T>) -> Result<()>
+    where T: std::io::Write,
+{
+    code_gen.preamble()
+}
+
+pub fn gen_postamble<T>(code_gen: &mut CodeGenerator<T>) -> Result<()>
+    where T: std::io::Write,
+{
+    code_gen.postamble()
+}
+
+pub fn gen_freeregs<T>(code_gen: &mut CodeGenerator<T>)
+    where T: std::io::Write,
+{
+    code_gen.free_all_registers();
+}
+
+pub fn gen_printint<T>(code_gen: &mut CodeGenerator<T>, reg: Reg) -> Result<()>
+    where T: std::io::Write,
+{
+    code_gen.print_int(reg)
 }
 
 pub fn generate_code<T>(tree: &Tree<AstNode>, code_gen: &mut CodeGenerator<T>) -> Result<()>

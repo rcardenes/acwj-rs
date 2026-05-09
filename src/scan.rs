@@ -1,15 +1,28 @@
 use std::{
     cell::RefCell,
+    collections::HashMap,
     io::{BufReader, Read}, ops::AddAssign
 };
 
-#[derive(Debug, Clone, PartialEq)]
+pub static TEXTLEN: usize = 512; // Maximum lenght of symbols in input
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token {
-    Plus,
-    Minus,
-    Star,
-    Slash,
+    Plus,         // +
+    Minus,        // -
+    Star,         // *
+    Slash,        // /
+    Semi,         // ;
+    Print,        // print
     IntLit(i64),
+}
+
+static KEYWORDS: &[(&str, Token)] = &[
+    ("print", Token::Print),
+];
+
+fn is_valid_ident_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
 }
 
 #[derive(Debug)]
@@ -17,6 +30,7 @@ pub struct Scanner<T> {
     buffer: RefCell<BufReader<T>>,
     putback_char: RefCell<Option<char>>,
     putback_token: RefCell<Option<Token>>,
+    keyword_map: HashMap<&'static str, Token>,
     line: RefCell<usize>,
 }
 
@@ -29,6 +43,7 @@ where T: Read
             putback_char: None.into(),
             putback_token: None.into(),
             line: 1.into(),
+            keyword_map: KEYWORDS.iter().cloned().collect(),
         }
     }
 
@@ -41,8 +56,19 @@ where T: Read
                 '-' => Some(Token::Minus),
                 '*' => Some(Token::Star),
                 '/' => Some(Token::Slash),
+                ';' => Some(Token::Semi),
                 c if c.is_ascii_digit() => {
                     Some(Token::IntLit(self.scanint(c)))
+                }
+                c if c.is_ascii_alphabetic() || c == '_' => {
+                    self.putback_char(c);
+                    let ident = self.scanident(TEXTLEN);
+
+                    if let Some(t) = self.keyword(&ident) {
+                        Some(t)
+                    } else {
+                        panic!("Unrecognised symbol '{}' on line {}", ident, self.line.borrow());
+                    }
                 }
                 c => {
                     panic!("Unrecognised character '{}' on line {}", c, self.line.borrow());
@@ -111,6 +137,57 @@ where T: Read
         }
 
         value
+    }
+
+    fn scanident(&self, lim: usize) -> String {
+        let mut buffer = String::new();
+
+        while let Some(c) = self.next() {
+            if is_valid_ident_char(c) {
+                if lim == buffer.len() {
+                    panic!("identifier too long in line {}", self.line.borrow());
+                }
+
+                buffer.push(c);
+            } else {
+                self.putback_char(c);
+                break;
+            }
+        }
+
+        buffer
+    }
+
+    fn keyword(&self, s: &str) -> Option<Token> {
+        self.keyword_map.get(s).cloned()
+    }
+
+    // Consume a token. If it's the end of the file, return 'false'.
+    // If a token was found and matches the expected one, return 'true'.
+    // Else panic
+    pub fn if_not_eof_matches(&self, expected: Token, expected_string: &str) -> bool {
+        if let Some(tok) = self.scan() {
+            if tok == expected {
+                true
+            } else {
+                panic!("Expected {} on line {}", expected_string, self.line.borrow());
+            }
+        } else {
+            false
+        }
+    }
+
+    // Consume a token. If it matches the expected one. Else panic
+    pub fn matches(&self, expected: Token, expected_string: &str) -> bool {
+        if self.if_not_eof_matches(expected, expected_string) {
+            true
+        } else {
+            panic!("End of input while expecting {}", expected_string);
+        }
+    }
+
+    pub fn semi(&self) -> bool {
+        self.matches(Token::Semi, ";")
     }
 }
 

@@ -1,6 +1,13 @@
 use crate::tree::IndexableNode;
 
 /* Grammar
+ * statements: statement
+ *           | statement statements
+ *           ;
+ *
+ * statement: 'print' expression ';'
+ *          ;
+ *
  * expression: number
  *           | expression '*' expression
  *           | expression '/' expression

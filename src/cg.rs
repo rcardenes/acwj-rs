@@ -77,7 +77,7 @@ impl<T> CodeGenerator<T>
         }
     }
 
-    fn free_all_registers(&mut self) {
+    pub fn free_all_registers(&mut self) {
         for val in self.reg_status.values_mut() {
             *val = true;
         }

@@ -15,7 +15,7 @@ pub fn op_precedence(line: usize, token: &Token) -> Result<Precedence> {
         Token::Minus => 10,
         Token::Star => 20,
         Token::Slash => 20,
-        Token::IntLit(_) => {
+        _  => {
             bail!("syntax error on line {}, token {:?}", line, token)
         }
     })
@@ -45,7 +45,7 @@ pub fn arithop<T>(scanner: &Scanner<T>, token: Token) -> Ast
         Token::Minus => Ast::Subtract,
         Token::Star => Ast::Multiply,
         Token::Slash => Ast::Divide,
-        _ => panic!("unknown token in airthop on line {}", scanner.get_line())
+        _ => panic!("unknown token in arithop on line {}", scanner.get_line())
     }
 }
 
@@ -57,6 +57,11 @@ pub fn binexpr<T>(scanner: &Scanner<T>, ptp: Precedence) -> Result<Tree<AstNode>
     let mut left = Tree::new(primary(scanner));
 
     while let Some(token) = scanner.scan() {
+        if token == Token::Semi {
+            scanner.putback_token(token);
+            break;
+        }
+
         let curr_prec = op_precedence(scanner.get_line(), &token)?;
         if curr_prec <= ptp {
             scanner.putback_token(token);
