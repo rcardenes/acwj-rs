@@ -20,6 +20,12 @@ pub trait CodeBackend {
     fn sub(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Self::Reg>;
     fn mul(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Self::Reg>;
     fn div(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Self::Reg>;
+    fn eq(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Self::Reg>;
+    fn ne(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Self::Reg>;
+    fn lt(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Self::Reg>;
+    fn le(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Self::Reg>;
+    fn gt(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Self::Reg>;
+    fn ge(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Self::Reg>;
     fn print_int(&mut self, r: Self::Reg) -> Result<()>;
 }
 
@@ -56,6 +62,12 @@ where
             Ast::Subtract => self.binary(tree, root, |cg, r1, r2| cg.sub(r1, r2)),
             Ast::Multiply => self.binary(tree, root, |cg, r1, r2| cg.mul(r1, r2)),
             Ast::Divide => self.binary(tree, root, |cg, r1, r2| cg.div(r1, r2)),
+            Ast::Equal => self.binary(tree, root, |cg, r1, r2| cg.eq(r1, r2)),
+            Ast::NotEqual => self.binary(tree, root, |cg, r1, r2| cg.ne(r1, r2)),
+            Ast::LessThan => self.binary(tree, root, |cg, r1, r2| cg.lt(r1, r2)),
+            Ast::LessThanOrEqual => self.binary(tree, root, |cg, r1, r2| cg.le(r1, r2)),
+            Ast::GreaterThan => self.binary(tree, root, |cg, r1, r2| cg.gt(r1, r2)),
+            Ast::GreaterThanOrEqual => self.binary(tree, root, |cg, r1, r2| cg.ge(r1, r2)),
             Ast::IntLit(val) => self.backend.load_int(*val),
             Ast::Ident(id) => self.backend.load_glob(id),
             Ast::LvIdent(id) => self.backend.store_glob(r.unwrap(), id),

@@ -51,7 +51,7 @@ where T: std::io::Read,
     fn assignment_statement(&mut self, ident: String) -> Result<()> {
         if self.symbols.find_glob(&ident).is_some() {
             let right = AstNode::make_leaf(Ast::LvIdent(ident));
-            self.scanner.matches(Token::Equals, "=");
+            self.scanner.matches(Token::Assign, "=");
             let mut left = binexpr(self.scanner, 0)?;
             let right_idx = left.append(right, false);
             let tree = left.new_root_with_right_idx(AstNode::make_leaf(Ast::Assign), right_idx);
@@ -70,7 +70,9 @@ where T: std::io::Read,
                 Token::Print => self.print_statement()?,
                 Token::Int => self.var_declaration(t)?,
                 Token::Ident(id) => self.assignment_statement(id)?,
-                Token::Plus|Token::Minus|Token::Star|Token::Slash|Token::Equals => {
+                Token::Plus|Token::Minus|Token::Star|Token::Slash|Token::Assign
+                           |Token::EQ|Token::NE|Token::GT|Token::GE|Token::LT|Token::LE
+                    => {
                     bail!("Found operator {:?} while expecting a statment, at line {}", t, self.scanner.get_line())
                 },
                 Token::IntLit(_) => {

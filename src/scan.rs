@@ -14,7 +14,13 @@ pub enum Token {
     Minus,         // -
     Star,          // *
     Slash,         // /
-    Equals,        // =
+    Assign,        // =
+    EQ,            // ==
+    NE,            // !=
+    LT,            // <
+    GT,            // >
+    LE,            // <=
+    GE,            // >=
     Ident(String), // identifier
     Semi,          // ;
     Int,           // int
@@ -70,7 +76,40 @@ where T: Read
                 '*' => Some(Token::Star),
                 '/' => Some(Token::Slash),
                 ';' => Some(Token::Semi),
-                '=' => Some(Token::Equals),
+                '=' => {
+                    if let Some('=') = self.peek() {
+                        self.clear_putback();
+                        Some(Token::EQ)
+                    } else {
+                        Some(Token::Assign)
+                    }
+                },
+                '<' => {
+                    if let Some('=') = self.peek() {
+                        self.clear_putback();
+                        Some(Token::LE)
+                    } else {
+                        Some(Token::LT)
+                    }
+                },
+                '>' => {
+                    if let Some('=') = self.peek() {
+                        self.clear_putback();
+                        Some(Token::GE)
+                    } else {
+                        Some(Token::GT)
+                    }
+                },
+                '!' => {
+                    match self.peek() {
+                        Some('=') => {
+                            self.clear_putback();
+                            Some(Token::NE)
+                        },
+                        Some(c) => self.fatal_extra("Unrecognised character", c),
+                        None => self.fatal("Found EOF while parsing expression")
+                    }
+                },
                 c if c.is_ascii_digit() => {
                     Some(Token::IntLit(self.scan_int(c)))
                 }
@@ -126,6 +165,19 @@ where T: Read
                 Err(_) => None,
             }
         }
+    }
+
+    fn peek(&self) -> Option<char> {
+        if let Some(c) = self.next() {
+            self.putback_char(c);
+            Some(c)
+        } else {
+            None
+        }
+    }
+
+    fn clear_putback(&self) {
+        _ = self.putback_char.take();
     }
 
     fn skip(&self) -> Option<char> {
@@ -203,7 +255,7 @@ where T: Read
     }
 
     pub fn ident(&self) -> String {
-        let res = self.if_not_eof_matches(|tok| match tok { &Token::Ident(_) => true, _ => false }, "identifier");
+        let res = self.if_not_eof_matches(|tok| matches!(tok, &Token::Ident(_)), "identifier");
         match res {
             Some(Token::Ident(name)) => name,
             None => panic!("End of input while expecting an identifier"),
@@ -343,7 +395,7 @@ mod tests {
 
     #[test]
     fn scan_equals() {
-        assert_eq!(scan_all_mem("="), vec![Token::Equals]);
+        assert_eq!(scan_all_mem("="), vec![Token::Assign]);
     }
 
     static TEST_DATA_FILES: &[&str] = &[

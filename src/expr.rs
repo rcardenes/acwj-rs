@@ -11,10 +11,10 @@ type Precedence = u8;
 /// can use it in a Pratt-style parser.
 pub fn op_precedence(line: usize, token: &Token) -> Result<Precedence> {
     Ok(match token {
-        Token::Plus => 10,
-        Token::Minus => 10,
-        Token::Star => 20,
-        Token::Slash => 20,
+        Token::Plus|Token::Minus => 10,
+        Token::Star|Token::Slash => 20,
+        Token::EQ|Token::NE => 30,
+        Token::LT|Token::LE|Token::GT|Token::GE => 40,
         _  => {
             bail!("syntax error on line {}, token {:?}", line, token)
         }
@@ -46,6 +46,12 @@ pub fn arithop<T>(scanner: &Scanner<T>, token: Token) -> Ast
         Token::Minus => Ast::Subtract,
         Token::Star => Ast::Multiply,
         Token::Slash => Ast::Divide,
+        Token::EQ => Ast::Equal,
+        Token::NE => Ast::NotEqual,
+        Token::LT => Ast::LessThan,
+        Token::LE => Ast::LessThanOrEqual,
+        Token::GT => Ast::GreaterThan,
+        Token::GE => Ast::GreaterThanOrEqual,
         _ => scanner.fatal_extra("Syntax error, token", token)
     }
 }
