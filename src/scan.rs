@@ -1,23 +1,36 @@
 use std::{
     cell::RefCell,
     collections::HashMap,
-    io::{BufReader, Read}, ops::AddAssign
+    fmt,
+    io::{BufReader, Read},
+    ops::AddAssign,
 };
 
 pub static TEXTLEN: usize = 512; // Maximum lenght of symbols in input
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token {
-    Plus,         // +
-    Minus,        // -
-    Star,         // *
-    Slash,        // /
-    Semi,         // ;
-    Print,        // print
-    IntLit(i64),
+    Plus,          // +
+    Minus,         // -
+    Star,          // *
+    Slash,         // /
+    Equals,        // =
+    Ident(String), // identifier
+    Semi,          // ;
+    Int,           // int
+    Print,         // print
+    IntLit(i64),   // Integer literal
+}
+
+
+impl fmt::Display for Token {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 static KEYWORDS: &[(&str, Token)] = &[
+    ("int", Token::Int),
     ("print", Token::Print),
 ];
 
@@ -57,17 +70,18 @@ where T: Read
                 '*' => Some(Token::Star),
                 '/' => Some(Token::Slash),
                 ';' => Some(Token::Semi),
+                '=' => Some(Token::Equals),
                 c if c.is_ascii_digit() => {
-                    Some(Token::IntLit(self.scanint(c)))
+                    Some(Token::IntLit(self.scan_int(c)))
                 }
                 c if c.is_ascii_alphabetic() || c == '_' => {
                     self.putback_char(c);
-                    let ident = self.scanident(TEXTLEN);
+                    let ident = self.scan_ident(TEXTLEN);
 
                     if let Some(t) = self.keyword(&ident) {
                         Some(t)
                     } else {
-                        panic!("Unrecognised symbol '{}' on line {}", ident, self.line.borrow());
+                        Some(Token::Ident(ident))
                     }
                 }
                 c => {
@@ -124,7 +138,7 @@ where T: Read
         None
     }
 
-    fn scanint(&self, first: char) -> i64 {
+    fn scan_int(&self, first: char) -> i64 {
         let mut value = first.to_digit(10).unwrap() as i64;
 
         while let Some(c) = self.next() {
@@ -139,7 +153,7 @@ where T: Read
         value
     }
 
-    fn scanident(&self, lim: usize) -> String {
+    fn scan_ident(&self, lim: usize) -> String {
         let mut buffer = String::new();
 
         while let Some(c) = self.next() {
@@ -165,29 +179,50 @@ where T: Read
     // Consume a token. If it's the end of the file, return 'false'.
     // If a token was found and matches the expected one, return 'true'.
     // Else panic
-    pub fn if_not_eof_matches(&self, expected: Token, expected_string: &str) -> bool {
+    pub fn if_not_eof_matches<F>(&self, expected: F, expected_string: &str) -> Option<Token>
+        where F: Fn(&Token) -> bool
+    {
         if let Some(tok) = self.scan() {
-            if tok == expected {
-                true
+            if expected(&tok) {
+                Some(tok)
             } else {
                 panic!("Expected {} on line {}", expected_string, self.line.borrow());
             }
         } else {
-            false
+            None
         }
     }
 
     // Consume a token. If it matches the expected one. Else panic
-    pub fn matches(&self, expected: Token, expected_string: &str) -> bool {
-        if self.if_not_eof_matches(expected, expected_string) {
-            true
+    pub fn matches(&self, expected: Token, expected_string: &str) -> Token {
+        if let Some(tok) = self.if_not_eof_matches(|tok| *tok == expected, expected_string) {
+            tok
         } else {
             panic!("End of input while expecting {}", expected_string);
         }
     }
 
-    pub fn semi(&self) -> bool {
+    pub fn ident(&self) -> String {
+        let res = self.if_not_eof_matches(|tok| match tok { &Token::Ident(_) => true, _ => false }, "identifier");
+        match res {
+            Some(Token::Ident(name)) => name,
+            None => panic!("End of input while expecting an identifier"),
+            _ => unreachable!()
+        }
+    }
+
+    pub fn semi(&self) -> Token {
         self.matches(Token::Semi, ";")
+    }
+
+    pub fn fatal(&self, error_msg: &str) -> ! {
+        panic!("{} on line {}", error_msg, self.get_line())
+    }
+
+    pub fn fatal_extra<D>(&self, error_msg: &str, value: D) -> !
+        where D: std::fmt::Display,
+    {
+        panic!("{}:{} on line {}", error_msg, value, self.get_line())
     }
 }
 
@@ -292,6 +327,23 @@ mod tests {
             scan_all_mem("1 + 2"),
             vec![Token::IntLit(1), Token::Plus, Token::IntLit(2)],
         );
+    }
+
+    #[test]
+    fn scan_int_keyword() {
+        assert_eq!(scan_all_mem("int"), vec![Token::Int]);
+    }
+
+    #[test]
+    fn scan_identifier() {
+        assert_eq!(scan_all_mem("x"), vec![Token::Ident("x".to_string())]);
+        assert_eq!(scan_all_mem("foo"), vec![Token::Ident("foo".to_string())]);
+        assert_eq!(scan_all_mem("_bar"), vec![Token::Ident("_bar".to_string())]);
+    }
+
+    #[test]
+    fn scan_equals() {
+        assert_eq!(scan_all_mem("="), vec![Token::Equals]);
     }
 
     static TEST_DATA_FILES: &[&str] = &[

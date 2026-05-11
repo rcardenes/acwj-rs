@@ -1,13 +1,14 @@
 use anyhow::Result;
-use clap::Parser;
+use clap::Parser as ClapParser;
 use acwj_rs::{
     Scanner,
-    cg::CodeGenerator,
-    cgen::*,
-    stmt::statements,
+    cg::X864_64Backend,
+    cgen::CodeGenerator,
+    sym::SymbolTable,
+    stmt::Parser,
 };
 
-#[derive(Parser, Debug)]
+#[derive(ClapParser, Debug)]
 struct Cli {
     file_name: String,
     #[clap(short, default_value_t = String::from("out.s"))]
@@ -20,13 +21,16 @@ fn main() -> Result<()> {
     let scanner = Scanner::new(file);
 
     let output = std::fs::File::create(args.output)?;
-    let mut code_gen = CodeGenerator::new(output);
+    let mut code_gen = CodeGenerator::new(X864_64Backend::new(output));
 
+    code_gen.gen_preamble()?;
+
+    let mut symbols = SymbolTable::new();
+    let mut parser = Parser::new(&scanner, &mut code_gen, &mut symbols);
     // Generate code
-    gen_preamble(&mut code_gen)?;
-    // generate_code(&ast_tree, &mut code_gen)?;
-    statements(&scanner, &mut code_gen)?;
-    gen_postamble(&mut code_gen)?;
+    parser.statements()?;
+
+    code_gen.gen_postamble()?;
 
     Ok(())
 }

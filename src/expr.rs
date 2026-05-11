@@ -22,15 +22,16 @@ pub fn op_precedence(line: usize, token: &Token) -> Result<Precedence> {
 }
 
 pub fn primary<T>(scanner: &Scanner<T>) -> AstNode
-    where T: std::io::Read
+    where T: std::io::Read,
 {
     // For an INTLIT token, make a leaf AST node for it,
     // Otherwise, a syntax error for any other token type
 
     if let Some(token) = scanner.scan() {
-        match token {
-            Token::IntLit(val) => AstNode::make_leaf(Ast::IntLit(val)),
-            _ => panic!("syntax error on line {}, token {:?}", scanner.get_line(), token)
+        match &token {
+            Token::IntLit(val) => AstNode::make_leaf(Ast::IntLit(*val)),
+            Token::Ident(id) => AstNode::make_leaf(Ast::Ident(id.into())),
+            _ => scanner.fatal_extra("Syntax error, token", token)
         }
     } else {
         panic!("EOF reached, expected an integer")
@@ -45,14 +46,14 @@ pub fn arithop<T>(scanner: &Scanner<T>, token: Token) -> Ast
         Token::Minus => Ast::Subtract,
         Token::Star => Ast::Multiply,
         Token::Slash => Ast::Divide,
-        _ => panic!("unknown token in arithop on line {}", scanner.get_line())
+        _ => scanner.fatal_extra("Syntax error, token", token)
     }
 }
 
 // Return an AST tree whose root is a binary operator.
 // ptp is the precedence of the previous token
 pub fn binexpr<T>(scanner: &Scanner<T>, ptp: Precedence) -> Result<Tree<AstNode>>
-    where T: std::io::Read
+    where T: std::io::Read,
 {
     let mut left = Tree::new(primary(scanner));
 
@@ -98,6 +99,15 @@ mod tests {
         let scanner = scanner_from("42");
         let node = primary(&scanner);
         assert!(matches!(node.op, Ast::IntLit(42)));
+        assert!(node.get_left_index().is_none());
+        assert!(node.get_right_index().is_none());
+    }
+
+    #[test]
+    fn primary_ident_returns_leaf_node() {
+        let scanner = scanner_from("x");
+        let node = primary(&scanner);
+        assert!(matches!(node.op, Ast::Ident(ref s) if s == "x"));
         assert!(node.get_left_index().is_none());
         assert!(node.get_right_index().is_none());
     }

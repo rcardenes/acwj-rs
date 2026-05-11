@@ -4,6 +4,7 @@ pub mod expr;
 pub mod cgen;
 pub mod scan;
 pub mod stmt;
+pub mod sym;
 pub mod tree;
 
 pub use scan::{Scanner, Token};

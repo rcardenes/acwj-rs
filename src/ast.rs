@@ -6,7 +6,12 @@ use crate::tree::IndexableNode;
  *           ;
  *
  * statement: 'print' expression ';'
+ *          | 'int' identifier ';'
+ *          | identifier '=' expression ';'
  *          ;
+ *
+ * identifier: T_IDENT
+ *           ;
  *
  * expression: number
  *           | expression '*' expression
@@ -26,6 +31,9 @@ pub enum Ast {
     Multiply,
     Divide,
     IntLit(i64),
+    Ident(String),
+    LvIdent(String),
+    Assign,
 }
 
 #[derive(Debug)]
