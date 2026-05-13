@@ -318,4 +318,86 @@ mod tests {
         assert!(node.mid_index.is_none());
         assert!(node.right_index.is_none());
     }
+
+    // --- Ast predicate methods ---
+
+    #[test]
+    fn is_arith_true_for_arithmetic_ops() {
+        assert!(Ast::Add.is_arith());
+        assert!(Ast::Subtract.is_arith());
+        assert!(Ast::Multiply.is_arith());
+        assert!(Ast::Divide.is_arith());
+    }
+
+    #[test]
+    fn is_arith_false_for_non_arithmetic() {
+        assert!(!Ast::Equal.is_arith());
+        assert!(!Ast::If.is_arith());
+        assert!(!Ast::IntLit(1).is_arith());
+        assert!(!Ast::While.is_arith());
+    }
+
+    #[test]
+    fn is_comparison_true_for_comparisons() {
+        assert!(Ast::Equal.is_comparison());
+        assert!(Ast::NotEqual.is_comparison());
+        assert!(Ast::LessThan.is_comparison());
+        assert!(Ast::LessThanOrEqual.is_comparison());
+        assert!(Ast::GreaterThan.is_comparison());
+        assert!(Ast::GreaterThanOrEqual.is_comparison());
+    }
+
+    #[test]
+    fn is_comparison_false_for_non_comparisons() {
+        assert!(!Ast::Add.is_comparison());
+        assert!(!Ast::While.is_comparison());
+        assert!(!Ast::IntLit(0).is_comparison());
+    }
+
+    #[test]
+    fn is_loop_with_comparison_true_for_if_and_while() {
+        assert!(Ast::If.is_loop_with_comparison());
+        assert!(Ast::While.is_loop_with_comparison());
+    }
+
+    #[test]
+    fn is_loop_with_comparison_false_for_others() {
+        assert!(!Ast::Add.is_loop_with_comparison());
+        assert!(!Ast::Equal.is_loop_with_comparison());
+        assert!(!Ast::IntLit(5).is_loop_with_comparison());
+    }
+
+    // --- AstNodeBuilder ---
+
+    #[test]
+    fn astnode_builder_builds_node_with_all_indices() {
+        let node = AstNodeBuilder::new(Ast::If)
+            .left(1)
+            .mid(2)
+            .right(3)
+            .build();
+        assert!(matches!(node.op, Ast::If));
+        assert_eq!(node.left_index, Some(1));
+        assert_eq!(node.mid_index, Some(2));
+        assert_eq!(node.right_index, Some(3));
+    }
+
+    #[test]
+    fn astnode_builder_defaults_to_no_indices() {
+        let node = AstNodeBuilder::new(Ast::Add).build();
+        assert!(node.left_index.is_none());
+        assert!(node.mid_index.is_none());
+        assert!(node.right_index.is_none());
+    }
+
+    // --- IndexableNode::make_glue ---
+
+    #[test]
+    fn make_glue_creates_glue_leaf_with_no_indices() {
+        let node = AstNode::make_glue();
+        assert!(matches!(node.op, Ast::Glue));
+        assert!(node.get_left_index().is_none());
+        assert!(node.get_mid_index().is_none());
+        assert!(node.get_right_index().is_none());
+    }
 }

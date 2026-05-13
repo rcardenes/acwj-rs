@@ -208,4 +208,71 @@ mod tests {
         let left_idx = tree.get_root().unwrap().get_left_index().unwrap();
         assert!(matches!(tree.get_node(left_idx).unwrap().op, Ast::Subtract));
     }
+
+    // --- op_precedence ---
+
+    #[test]
+    fn op_precedence_returns_correct_values() {
+        let s = scanner_from("");
+        let line = s.get_line();
+        assert_eq!(op_precedence(line, &Token::Plus).unwrap(), 10);
+        assert_eq!(op_precedence(line, &Token::Minus).unwrap(), 10);
+        assert_eq!(op_precedence(line, &Token::Star).unwrap(), 20);
+        assert_eq!(op_precedence(line, &Token::Slash).unwrap(), 20);
+        assert_eq!(op_precedence(line, &Token::EQ).unwrap(), 30);
+        assert_eq!(op_precedence(line, &Token::NE).unwrap(), 30);
+        assert_eq!(op_precedence(line, &Token::LT).unwrap(), 40);
+        assert_eq!(op_precedence(line, &Token::LE).unwrap(), 40);
+        assert_eq!(op_precedence(line, &Token::GT).unwrap(), 40);
+        assert_eq!(op_precedence(line, &Token::GE).unwrap(), 40);
+    }
+
+    #[test]
+    fn op_precedence_fails_on_non_operator() {
+        assert!(op_precedence(1, &Token::Semi).is_err());
+        assert!(op_precedence(1, &Token::IntLit(1)).is_err());
+    }
+
+    // --- is_arithop ---
+
+    #[test]
+    fn is_arithop_true_for_all_operator_tokens() {
+        for tok in &[Token::Plus, Token::Minus, Token::Star, Token::Slash,
+                     Token::EQ, Token::NE, Token::LT, Token::LE, Token::GT, Token::GE] {
+            assert!(is_arithop(tok), "{tok:?} should be an arith op");
+        }
+    }
+
+    #[test]
+    fn is_arithop_false_for_non_operators() {
+        assert!(!is_arithop(&Token::IntLit(1)));
+        assert!(!is_arithop(&Token::Semi));
+        assert!(!is_arithop(&Token::Ident("x".into())));
+    }
+
+    // --- arithop comparison variants ---
+
+    #[test]
+    fn arithop_comparison_operators() {
+        let s = scanner_from("");
+        assert!(matches!(arithop(&s, Token::EQ), Ast::Equal));
+        assert!(matches!(arithop(&s, Token::NE), Ast::NotEqual));
+        assert!(matches!(arithop(&s, Token::LT), Ast::LessThan));
+        assert!(matches!(arithop(&s, Token::LE), Ast::LessThanOrEqual));
+        assert!(matches!(arithop(&s, Token::GT), Ast::GreaterThan));
+        assert!(matches!(arithop(&s, Token::GE), Ast::GreaterThanOrEqual));
+    }
+
+    // --- binexpr with comparisons ---
+
+    #[test]
+    fn binexpr_equality_comparison_builds_equal_root() {
+        let scanner = scanner_from("3 == 5");
+        let tree = binexpr(&scanner, 0).expect("Expected a clean parsing");
+        assert!(matches!(tree.get_root().unwrap().op, Ast::Equal));
+        let left = tree.get_node(tree.get_root().unwrap().get_left_index().unwrap()).unwrap();
+        assert!(matches!(left.op, Ast::IntLit(3)));
+        let right = tree.get_node(tree.get_root().unwrap().get_right_index().unwrap()).unwrap();
+        assert!(matches!(right.op, Ast::IntLit(5)));
+    }
 }

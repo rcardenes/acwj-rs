@@ -481,4 +481,88 @@ mod tests {
 
         let _: Vec<Token> = ScannerIter::new(scanner).collect();
     }
+
+    // --- multi-char comparison operators ---
+
+    #[test]
+    fn scan_double_eq() {
+        assert_eq!(scan_all_mem("=="), vec![Token::EQ]);
+    }
+
+    #[test]
+    fn scan_ne() {
+        assert_eq!(scan_all_mem("!="), vec![Token::NE]);
+    }
+
+    #[test]
+    fn scan_le() {
+        assert_eq!(scan_all_mem("<="), vec![Token::LE]);
+    }
+
+    #[test]
+    fn scan_ge() {
+        assert_eq!(scan_all_mem(">="), vec![Token::GE]);
+    }
+
+    #[test]
+    fn scan_single_char_lt_and_gt() {
+        assert_eq!(scan_all_mem("<"), vec![Token::LT]);
+        assert_eq!(scan_all_mem(">"), vec![Token::GT]);
+    }
+
+    // --- braces and parens ---
+
+    #[test]
+    fn scan_braces_and_parens() {
+        assert_eq!(scan_all_mem("{"), vec![Token::LeftBrace]);
+        assert_eq!(scan_all_mem("}"), vec![Token::RightBrace]);
+        assert_eq!(scan_all_mem("("), vec![Token::LeftParen]);
+        assert_eq!(scan_all_mem(")"), vec![Token::RightParen]);
+    }
+
+    // --- keywords ---
+
+    #[test]
+    fn scan_keywords() {
+        assert_eq!(scan_all_mem("if"), vec![Token::If]);
+        assert_eq!(scan_all_mem("else"), vec![Token::Else]);
+        assert_eq!(scan_all_mem("while"), vec![Token::While]);
+        assert_eq!(scan_all_mem("print"), vec![Token::Print]);
+    }
+
+    // --- Scanner helper methods ---
+
+    #[test]
+    fn matches_succeeds_on_correct_token() {
+        let scanner = Scanner::new(Cursor::new(b"+".to_vec()));
+        let tok = scanner.matches(Token::Plus, "+");
+        assert_eq!(tok, Token::Plus);
+    }
+
+    #[test]
+    #[should_panic]
+    fn matches_panics_on_wrong_token() {
+        let scanner = Scanner::new(Cursor::new(b"-".to_vec()));
+        scanner.matches(Token::Plus, "+");
+    }
+
+    #[test]
+    fn ident_returns_identifier_name() {
+        let scanner = Scanner::new(Cursor::new(b"foo".to_vec()));
+        assert_eq!(scanner.ident(), "foo");
+    }
+
+    #[test]
+    fn maybe_token_true_consumes_token() {
+        let scanner = Scanner::new(Cursor::new(b"+".to_vec()));
+        assert!(scanner.maybe_token(Token::Plus));
+        assert!(scanner.scan().is_none());
+    }
+
+    #[test]
+    fn maybe_token_false_puts_back_token() {
+        let scanner = Scanner::new(Cursor::new(b"+".to_vec()));
+        assert!(!scanner.maybe_token(Token::Minus));
+        assert_eq!(scanner.scan(), Some(Token::Plus));
+    }
 }

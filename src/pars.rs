@@ -161,4 +161,96 @@ where T: std::io::Read,
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+    use super::*;
+    use crate::ast::Ast;
+    use crate::scan::Scanner;
+    use crate::sym::SymbolTable;
+
+    fn parser_from(s: &str) -> (Scanner<Cursor<Vec<u8>>>, SymbolTable) {
+        (Scanner::new(Cursor::new(s.as_bytes().to_vec())), SymbolTable::new())
+    }
+
+    fn contains_op(tree: &ParseTree, op: &Ast) -> bool {
+        let mut i = 0;
+        while let Some(node) = tree.get_node(i) {
+            if &node.op == op { return true; }
+            i += 1;
+        }
+        false
+    }
+
+    #[test]
+    fn compound_statement_empty_body() {
+        let (scanner, mut symbols) = parser_from("{}");
+        let mut parser = Parser::new(&scanner, &mut symbols);
+        let tree = parser.compound_statement().expect("parse failed");
+        assert!(tree.is_empty());
+    }
+
+    #[test]
+    fn compound_statement_var_declaration() {
+        let (scanner, mut symbols) = parser_from("{ int x; }");
+        let mut parser = Parser::new(&scanner, &mut symbols);
+        let tree = parser.compound_statement().expect("parse failed");
+        assert!(matches!(tree.get_root().unwrap().op, Ast::GlobalDec(ref s) if s == "x"));
+    }
+
+    #[test]
+    fn compound_statement_print() {
+        let (scanner, mut symbols) = parser_from("{ print 42; }");
+        let mut parser = Parser::new(&scanner, &mut symbols);
+        let tree = parser.compound_statement().expect("parse failed");
+        assert!(contains_op(&tree, &Ast::Print));
+        assert!(contains_op(&tree, &Ast::IntLit(42)));
+    }
+
+    #[test]
+    fn compound_statement_assignment() {
+        let (scanner, mut symbols) = parser_from("{ int x; x = 5; }");
+        let mut parser = Parser::new(&scanner, &mut symbols);
+        let tree = parser.compound_statement().expect("parse failed");
+        assert!(contains_op(&tree, &Ast::Assign));
+        assert!(contains_op(&tree, &Ast::LvIdent("x".into())));
+    }
+
+    #[test]
+    fn compound_statement_if_no_else() {
+        let (scanner, mut symbols) = parser_from("{ int x; if (x == 5) { print x; } }");
+        let mut parser = Parser::new(&scanner, &mut symbols);
+        let tree = parser.compound_statement().expect("parse failed");
+        assert!(contains_op(&tree, &Ast::If));
+        assert!(contains_op(&tree, &Ast::Equal));
+    }
+
+    #[test]
+    fn compound_statement_if_else() {
+        let (scanner, mut symbols) = parser_from(
+            "{ int x; if (x < 5) { print x; } else { print x; } }"
+        );
+        let mut parser = Parser::new(&scanner, &mut symbols);
+        let tree = parser.compound_statement().expect("parse failed");
+        assert!(contains_op(&tree, &Ast::If));
+        assert!(contains_op(&tree, &Ast::LessThan));
+    }
+
+    #[test]
+    fn compound_statement_while() {
+        let (scanner, mut symbols) = parser_from("{ int x; while (x < 10) { print x; } }");
+        let mut parser = Parser::new(&scanner, &mut symbols);
+        let tree = parser.compound_statement().expect("parse failed");
+        assert!(contains_op(&tree, &Ast::While));
+        assert!(contains_op(&tree, &Ast::LessThan));
+    }
+
+    #[test]
+    #[should_panic]
+    fn compound_statement_undeclared_variable_panics() {
+        let (scanner, mut symbols) = parser_from("{ x = 5; }");
+        let mut parser = Parser::new(&scanner, &mut symbols);
+        let _ = parser.compound_statement();
+    }
+}
 
