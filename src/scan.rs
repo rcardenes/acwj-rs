@@ -28,6 +28,7 @@ pub enum Token {
     RightParen,    // )
     Semi,          // ;
     Else,          // else
+    For,           // for
     If,            // if
     Int,           // int
     Print,         // print
@@ -44,6 +45,7 @@ impl fmt::Display for Token {
 
 static KEYWORDS: &[(&str, Token)] = &[
     ("else", Token::Else),
+    ("for", Token::For),
     ("if", Token::If),
     ("int", Token::Int),
     ("print", Token::Print),
@@ -76,6 +78,17 @@ where T: Read
         }
     }
 
+    pub fn is_eof(&self) -> bool {
+        if self.putback_token.borrow().is_some() {
+            false
+        } else if let Some(c) = self.skip() {
+            self.putback_char(c);
+            false
+        } else {
+            true
+        }
+    }
+
     pub fn scan(&self) -> Option<Token> {
         if let Some(t) = self.putback_token.borrow_mut().take() {
             Some(t)
@@ -92,7 +105,7 @@ where T: Read
                 ';' => Some(Token::Semi),
                 '=' => {
                     if let Some('=') = self.peek() {
-                        self.clear_putback();
+                        self.clear_putback_char();
                         Some(Token::EQ)
                     } else {
                         Some(Token::Assign)
@@ -100,7 +113,7 @@ where T: Read
                 },
                 '<' => {
                     if let Some('=') = self.peek() {
-                        self.clear_putback();
+                        self.clear_putback_char();
                         Some(Token::LE)
                     } else {
                         Some(Token::LT)
@@ -108,7 +121,7 @@ where T: Read
                 },
                 '>' => {
                     if let Some('=') = self.peek() {
-                        self.clear_putback();
+                        self.clear_putback_char();
                         Some(Token::GE)
                     } else {
                         Some(Token::GT)
@@ -117,7 +130,7 @@ where T: Read
                 '!' => {
                     match self.peek() {
                         Some('=') => {
-                            self.clear_putback();
+                            self.clear_putback_char();
                             Some(Token::NE)
                         },
                         Some(c) => self.fatal_extra("Unrecognised character", c),
@@ -190,7 +203,7 @@ where T: Read
         }
     }
 
-    fn clear_putback(&self) {
+    fn clear_putback_char(&self) {
         _ = self.putback_char.take();
     }
 
@@ -525,6 +538,7 @@ mod tests {
     #[test]
     fn scan_keywords() {
         assert_eq!(scan_all_mem("if"), vec![Token::If]);
+        assert_eq!(scan_all_mem("for"), vec![Token::For]);
         assert_eq!(scan_all_mem("else"), vec![Token::Else]);
         assert_eq!(scan_all_mem("while"), vec![Token::While]);
         assert_eq!(scan_all_mem("print"), vec![Token::Print]);
@@ -564,5 +578,24 @@ mod tests {
         let scanner = Scanner::new(Cursor::new(b"+".to_vec()));
         assert!(!scanner.maybe_token(Token::Minus));
         assert_eq!(scanner.scan(), Some(Token::Plus));
+    }
+
+    #[test]
+    fn is_eof_false_with_putback_token() {
+        let scanner = Scanner::new(Cursor::new(b"".to_vec()));
+        scanner.putback_token(Token::Semi);
+        assert!(!scanner.is_eof());
+    }
+
+    #[test]
+    fn is_eof_true_on_empty_input() {
+        let scanner = Scanner::new(Cursor::new(b"".to_vec()));
+        assert!(scanner.is_eof());
+    }
+
+    #[test]
+    fn is_eof_false_on_non_empty_input() {
+        let scanner = Scanner::new(Cursor::new(b"+".to_vec()));
+        assert!(!scanner.is_eof());
     }
 }

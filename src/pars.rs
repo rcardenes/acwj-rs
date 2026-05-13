@@ -7,7 +7,53 @@ use crate::{
     tree::Tree,
 };
 
+/* Grammar
+ *  compound_statement: '{' '}'          // empty, i.e. no statement
+ *      |      '{' statement '}'
+ *      |      '{' statement statements '}'
+ *      ;
+ *
+ * statement: print_statement
+ *      |     declaration
+ *      |     assignment_statement
+ *      |     if_statement
+ *      |     while_statement
+ *      ;
+ *
+ * print_statement: 'print' expression ';'  ;
+ *
+ * declaration: 'int' identifier ';'  ;
+ *
+ * assignment_statement: identifier '=' expression ';'   ;
+ *
+ * if_statement: if_head
+ *      |        if_head 'else' compound_statement
+ *      ;
+ *
+ * if_head: 'if' '(' true_false_expression ')' compound_statement  ;
+ *
+ * while_statement: 'while' '(' true_false_expression ')' compound_statement  ;
+ *
+ * for_statement: 'for' '(' preop_statement ';'
+ *                          true_false_expression ';'
+ *                          postop_statement ')' compound_statement  ;
+ *
+ * preop_statement:  statement  ;        (for now)
+ * postop_statement: statement  ;        (for now)
+ *
+ * identifier: T_IDENT ;
+ */
+
 type ParseTree = Tree<AstNode>;
+
+fn compose(op: Ast, left: ParseTree, right: ParseTree) -> ParseTree {
+    let (conc, right_idx) = left.concat(right);
+    if let Some(idx) = right_idx {
+        conc.new_root_with_right_idx(AstNode::make_leaf(op), idx)
+    } else {
+        conc
+    }
+}
 
 pub struct Parser<'a, T>
     where T: std::io::Read,
@@ -27,11 +73,25 @@ where T: std::io::Read,
         }
     }
 
+    fn condition(&self) -> Result<ParseTree> {
+        let tree = binexpr(self.scanner, 0)?;
+
+        // Temporarily limit the "if" condition to comparisons
+        match tree.get_root() {
+            Some(root) => {
+                if !root.op.is_comparison() {
+                    self.scanner.fatal("Bad comparison operator");
+                }
+            },
+            None => unreachable!("Binary expression tree without a root!"),
+        }
+
+        Ok(tree)
+    }
+
     fn print_statement(&mut self) -> Result<ParseTree> {
         let root = AstNode::make_leaf(Ast::Print);
         let tree = binexpr(self.scanner, 0)?.new_root(root);
-
-        self.scanner.semi();
 
         Ok(tree)
     }
@@ -41,7 +101,6 @@ where T: std::io::Read,
 
         self.symbols.add_glob(&ident);
         // self.code_gen.gen_globsym(&ident)?;
-        self.scanner.semi();
 
         Ok(Tree::new(AstNode::make_leaf(Ast::GlobalDec(ident))))
     }
@@ -65,19 +124,7 @@ where T: std::io::Read,
 
     fn if_statement(&mut self) -> Result<ParseTree> {
         self.scanner.lparen();
-
-        let condition = binexpr(self.scanner, 0)?;
-
-        // Temporarily limit the "if" condition to comparisons
-        match condition.get_root() {
-            Some(root) => {
-                if !root.op.is_comparison() {
-                    self.scanner.fatal("Bad comparison operator");
-                }
-            },
-            None => unreachable!("Binary expression tree without a root!"),
-        }
-
+        let condition = self.condition()?;
         self.scanner.rparen();
 
         let true_branch = self.compound_statement()?;
@@ -100,19 +147,7 @@ where T: std::io::Read,
 
     fn while_statement(&mut self) -> Result<ParseTree> {
         self.scanner.lparen();
-
-        let condition = binexpr(self.scanner, 0)?;
-
-        // Temporarily limit the "if" condition to comparisons
-        match condition.get_root() {
-            Some(root) => {
-                if !root.op.is_comparison() {
-                    self.scanner.fatal("Bad comparison operator");
-                }
-            },
-            None => unreachable!("Binary expression tree without a root!"),
-        }
-
+        let condition = self.condition()?;
         self.scanner.rparen();
 
         let (t, right_idx) = condition.concat(self.compound_statement()?);
@@ -123,37 +158,98 @@ where T: std::io::Read,
         })
     }
 
+    fn for_statement(&mut self) -> Result<ParseTree> {
+        // No need for new grammar elements or code generation to
+        // represent the "for" loop. Instead we'll treat it as syntactic
+        // sugar for:
+        //
+        // pre_op;
+        // while condition {
+        //    body
+        //    post_op;
+        // }
+        //
+        //
+        self.scanner.lparen();
+
+        let pre_op = self.single_statement()?;
+        self.scanner.semi();
+
+        let condition = self.condition()?;
+        self.scanner.semi();
+
+        let post_op = self.single_statement()?;
+        self.scanner.rparen();
+
+        let body = self.compound_statement()?;
+
+        let tree = compose(Ast::Glue,
+                           pre_op,
+                           compose(Ast::While,
+                                   condition,
+                                   compose(Ast::Glue,
+                                           body,
+                                           post_op)));
+
+        Ok(tree)
+    }
+
+    pub fn single_statement(&mut self) -> Result<ParseTree> {
+        match self.scanner.scan() {
+            Some(Token::Print) => self.print_statement(),
+            Some(t @ Token::Int) => self.var_declaration(t),
+            Some(Token::Ident(id)) => self.assignment_statement(id),
+            Some(Token::If) => self.if_statement(),
+            Some(Token::For) => self.for_statement(),
+            Some(Token::While) => self.while_statement(),
+            Some(t @ Token::Else
+                |t @ Token::LeftBrace
+                |t @ Token::LeftParen
+                |t @ Token::RightParen)
+                => bail!("Syntax error, token {}, at line {}", t, self.scanner.get_line()),
+            Some(t @ Token::Plus
+                |t @ Token::Minus
+                |t @ Token::Star
+                |t @ Token::Slash
+                |t @ Token::Assign
+                |t @ Token::EQ
+                |t @ Token::NE
+                |t @ Token::GT
+                |t @ Token::GE
+                |t @ Token::LT
+                |t @ Token::LE)
+                => {
+                bail!("Found operator {:?} while expecting a statment, at line {}", t, self.scanner.get_line())
+            },
+            Some(Token::IntLit(_)) => {
+                bail!("Found integer while expecting a statment, at line {}", self.scanner.get_line())
+            }
+            Some(Token::RightBrace) => panic!("Expected statement, found '}}'"),
+            Some(Token::Semi) => panic!("Expected statement, found 'l'"), // A semicolon on its own equals an empty statement
+            None => { panic!("EOF found while expecting a statement") }
+        }
+    }
+
     pub fn compound_statement(&mut self) -> Result<ParseTree> {
         self.scanner.lbrace();
 
-        let mut left: Option<ParseTree> = None;
+        let mut left = Tree::empty();
 
-        while let Some(t) = self.scanner.scan() {
-            let right = match t {
-                Token::Print => self.print_statement()?,
-                Token::Int => self.var_declaration(t)?,
-                Token::Ident(id) => self.assignment_statement(id)?,
-                Token::If => self.if_statement()?,
-                Token::While => self.while_statement()?,
-                Token::RightBrace => {
-                    return Ok(left.unwrap_or(Tree::empty()));
-                },
-                Token::Else|Token::LeftBrace|Token::LeftParen|Token::RightParen
-                    => bail!("Syntax error, token {}, at line {}", t, self.scanner.get_line()),
-                Token::Plus|Token::Minus|Token::Star|Token::Slash|Token::Assign
-                           |Token::EQ|Token::NE|Token::GT|Token::GE|Token::LT|Token::LE
-                    => {
-                    bail!("Found operator {:?} while expecting a statment, at line {}", t, self.scanner.get_line())
-                },
-                Token::IntLit(_) => {
-                    bail!("Found integer while expecting a statment, at line {}", self.scanner.get_line())
+        while !self.scanner.is_eof() {
+            if self.scanner.maybe_token(Token::RightBrace) {
+                return Ok(left);
+            } else if self.scanner.maybe_token(Token::Semi) {
+                // Empty statement
+                continue
+            }
+
+            let tree = self.single_statement()?;
+            if let Some(AstNode { op, .. })= tree.get_root() {
+                if matches!(op, Ast::Print|Ast::Assign) {
+                    self.scanner.semi();
                 }
-                Token::Semi => continue // A semicolon on its own equals an empty statement
-            };
 
-            left = match left {
-                Some(l) => Some(l.glue(right)),
-                None => Some(right),
+                left = compose(Ast::Glue, left, tree);
             }
         }
 
@@ -249,6 +345,56 @@ mod tests {
     #[should_panic]
     fn compound_statement_undeclared_variable_panics() {
         let (scanner, mut symbols) = parser_from("{ x = 5; }");
+        let mut parser = Parser::new(&scanner, &mut symbols);
+        let _ = parser.compound_statement();
+    }
+
+    #[test]
+    fn compound_statement_for_loop() {
+        let (scanner, mut symbols) = parser_from(
+            "{ int i; for (i= 1; i <= 10; i= i + 1) { print i; } }"
+        );
+        let mut parser = Parser::new(&scanner, &mut symbols);
+        let tree = parser.compound_statement().expect("parse failed");
+        assert!(contains_op(&tree, &Ast::While));
+        assert!(contains_op(&tree, &Ast::LessThanOrEqual));
+        assert!(contains_op(&tree, &Ast::Print));
+    }
+
+    #[test]
+    fn compound_statement_empty_semis() {
+        let (scanner, mut symbols) = parser_from("{ ; ; ; }");
+        let mut parser = Parser::new(&scanner, &mut symbols);
+        let tree = parser.compound_statement().expect("parse failed");
+        assert!(tree.is_empty());
+    }
+
+    #[test]
+    fn single_statement_var_declaration() {
+        let (scanner, mut symbols) = parser_from("int x");
+        let mut parser = Parser::new(&scanner, &mut symbols);
+        let tree = parser.single_statement().expect("parse failed");
+        assert!(matches!(tree.get_root().unwrap().op, Ast::GlobalDec(ref s) if s == "x"));
+    }
+
+    #[test]
+    fn single_statement_for() {
+        let (scanner, mut symbols) = parser_from(
+            "for (i= 1; i <= 10; i= i + 1) { print i; }"
+        );
+        symbols.add_glob("i");
+        let mut parser = Parser::new(&scanner, &mut symbols);
+        let tree = parser.single_statement().expect("parse failed");
+        assert!(contains_op(&tree, &Ast::While));
+        assert!(contains_op(&tree, &Ast::LessThanOrEqual));
+    }
+
+    #[test]
+    #[should_panic]
+    fn condition_bad_comparison_panics() {
+        let (scanner, mut symbols) = parser_from(
+            "{ int x; if (x) { print x; } }"
+        );
         let mut parser = Parser::new(&scanner, &mut symbols);
         let _ = parser.compound_statement();
     }
