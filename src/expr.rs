@@ -184,18 +184,18 @@ mod tests {
     fn binexpr_single_integer_returns_intlit_root() {
         let scanner = scanner_from("7");
         let tree = binexpr(&scanner, 0).expect("Expected a clean parsing");
-        assert!(matches!(tree.get_root().op, Ast::IntLit(7)));
-        assert!(tree.get_root().get_left_index().is_none());
+        assert!(matches!(tree.get_root().unwrap().op, Ast::IntLit(7)));
+        assert!(tree.get_root().unwrap().get_left_index().is_none());
     }
 
     #[test]
     fn binexpr_addition_builds_correct_tree() {
         let scanner = scanner_from("3 + 5");
         let tree = binexpr(&scanner, 0).expect("Expected a clean parsing");
-        assert!(matches!(tree.get_root().op, Ast::Add));
-        let left = tree.get_node(tree.get_root().get_left_index().unwrap()).unwrap();
+        assert!(matches!(tree.get_root().unwrap().op, Ast::Add));
+        let left = tree.get_node(tree.get_root().unwrap().get_left_index().unwrap()).unwrap();
         assert!(matches!(left.op, Ast::IntLit(3)));
-        let right = tree.get_node(tree.get_root().get_right_index().unwrap()).unwrap();
+        let right = tree.get_node(tree.get_root().unwrap().get_right_index().unwrap()).unwrap();
         assert!(matches!(right.op, Ast::IntLit(5)));
     }
 
@@ -204,8 +204,8 @@ mod tests {
         // "2 - 3 + 5" parses as Add(Subtract(2, 3), 5): last op is root, left subtree holds earlier ops
         let scanner = scanner_from("2 - 3 + 5");
         let tree = binexpr(&scanner, 0).expect("Expected a clean parsing");
-        assert!(matches!(tree.get_root().op, Ast::Add));
-        let left_idx = tree.get_root().get_left_index().unwrap();
+        assert!(matches!(tree.get_root().unwrap().op, Ast::Add));
+        let left_idx = tree.get_root().unwrap().get_left_index().unwrap();
         assert!(matches!(tree.get_node(left_idx).unwrap().op, Ast::Subtract));
     }
 }

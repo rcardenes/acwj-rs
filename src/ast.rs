@@ -236,9 +236,9 @@ mod tests {
         let r = tree.append(AstNode::make_leaf(Ast::IntLit(5)), false); // idx 1
         tree.append(AstNode::new(Ast::Add, Some(0), None, Some(r)), true);          // idx 2, new root
 
-        assert!(matches!(tree.get_root().op, Ast::Add));
-        assert_eq!(tree.get_root().get_left_index(), Some(0));
-        assert_eq!(tree.get_root().get_right_index(), Some(r));
+        assert!(matches!(tree.get_root().unwrap().op, Ast::Add));
+        assert_eq!(tree.get_root().unwrap().get_left_index(), Some(0));
+        assert_eq!(tree.get_root().unwrap().get_right_index(), Some(r));
         assert!(matches!(tree.get_node(0).unwrap().op, Ast::IntLit(3)));
         assert!(matches!(tree.get_node(r).unwrap().op, Ast::IntLit(5)));
     }
@@ -252,10 +252,10 @@ mod tests {
         let idx4 = tree.append(AstNode::make_leaf(Ast::IntLit(4)),false); // idx 3
         tree.append(AstNode::new(Ast::Add, Some(mul), None, Some(idx4)), true);          // idx 4, new root
 
-        assert!(matches!(tree.get_root().op, Ast::Add));
-        let left_idx = tree.get_root().get_left_index().unwrap();
+        assert!(matches!(tree.get_root().unwrap().op, Ast::Add));
+        let left_idx = tree.get_root().unwrap().get_left_index().unwrap();
         assert!(matches!(tree.get_node(left_idx).unwrap().op, Ast::Multiply));
-        let right_idx = tree.get_root().get_right_index().unwrap();
+        let right_idx = tree.get_root().unwrap().get_right_index().unwrap();
         assert!(matches!(tree.get_node(right_idx).unwrap().op, Ast::IntLit(4)));
     }
 

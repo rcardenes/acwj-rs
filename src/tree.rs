@@ -168,6 +168,9 @@ mod tests {
                 right: self.right.map(|r| r + offset),
             }
         }
+        fn make_glue() -> Self {
+            StubNode { left: None, mid: None, right: None }
+        }
     }
 
     fn leaf() -> StubNode { StubNode { left: None, mid: None, right: None } }
@@ -176,7 +179,7 @@ mod tests {
     #[test]
     fn new_root_is_first_node() {
         let tree = Tree::new(leaf());
-        assert!(tree.get_root().left.is_none());
+        assert!(tree.get_root().unwrap().left.is_none());
     }
 
     #[test]
@@ -190,7 +193,7 @@ mod tests {
     fn append_without_new_root_keeps_original_root() {
         let mut tree = Tree::new(branch(0, 0));
         tree.append(leaf(), false);
-        assert!(tree.get_root().left.is_some()); // still the original branch node
+        assert!(tree.get_root().unwrap().left.is_some()); // still the original branch node
     }
 
     #[test]
@@ -199,8 +202,8 @@ mod tests {
         let idx1 = tree.append(leaf(), false);     // idx 1
         tree.append(branch(0, idx1), true);        // idx 2, becomes root
 
-        assert_eq!(tree.get_root().left, Some(0));
-        assert_eq!(tree.get_root().right, Some(idx1));
+        assert_eq!(tree.get_root().unwrap().left, Some(0));
+        assert_eq!(tree.get_root().unwrap().right, Some(idx1));
     }
 
     #[test]
@@ -224,8 +227,8 @@ mod tests {
         let mut tree = Tree::new(leaf());              // idx 0, root=0
         let idx1 = tree.append(leaf(), false);         // idx 1
         let tree = tree.new_root_with_right_idx(branch(0, 0), idx1); // new root at idx 2
-        assert_eq!(tree.get_root().left, Some(0));     // old root
-        assert_eq!(tree.get_root().right, Some(idx1));
+        assert_eq!(tree.get_root().unwrap().left, Some(0));     // old root
+        assert_eq!(tree.get_root().unwrap().right, Some(idx1));
     }
 
     #[test]
@@ -233,8 +236,8 @@ mod tests {
         let mut tree = Tree::new(leaf());              // idx 0, root=0
         let idx1 = tree.append(leaf(), false);         // idx 1
         let tree = tree.new_root_with_left_idx(branch(0, 0), idx1); // new root at idx 2
-        assert_eq!(tree.get_root().left, Some(idx1));
-        assert_eq!(tree.get_root().right, Some(0));    // old root
+        assert_eq!(tree.get_root().unwrap().left, Some(idx1));
+        assert_eq!(tree.get_root().unwrap().right, Some(0));    // old root
     }
 
     // --- concat ---
@@ -248,8 +251,8 @@ mod tests {
 
         let (combined, new_root) = tree1.concat(tree2);
         // offset=1: branch indices become (0+1, 1+1)=(1,2); root becomes 2+1=3
-        assert_eq!(new_root, 3);
-        let root_node = combined.get_node(new_root).unwrap();
+        assert_eq!(new_root, Some(3));
+        let root_node = combined.get_node(new_root.unwrap()).unwrap();
         assert_eq!(root_node.left, Some(1));
         assert_eq!(root_node.right, Some(2));
     }
@@ -261,7 +264,7 @@ mod tests {
         let tree2 = Tree::new(leaf());
 
         let (combined, _) = tree1.concat(tree2);
-        assert!(combined.get_root().left.is_some()); // still the original branch
+        assert!(combined.get_root().unwrap().left.is_some()); // still the original branch
     }
 
     #[test]
@@ -270,7 +273,7 @@ mod tests {
         let mut tree2 = Tree::new(leaf());
         tree2.append(leaf(), true); // root=1
         let (_, new_root) = tree1.concat(tree2);
-        assert_eq!(new_root, 2); // tree2.root(1) + offset(1)
+        assert_eq!(new_root, Some(2)); // tree2.root(1) + offset(1)
     }
 
     // --- get_root_or_node ---
