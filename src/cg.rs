@@ -27,10 +27,13 @@ printint:
 \tnop
 \tleave
 \tret
+";
 
-\t.globl\tmain
-\t.type\tmain, @function
-main:
+static FUNC_PREAMBLE: &str = "
+\t.text
+\t.globl\t{name}
+\t.type\t{name} @function
+{name}:
 \tpushq\t%rbp
 \tmovq\t%rsp, %rbp
 ";
@@ -181,7 +184,13 @@ impl<T> CodeBackend for X864_64Backend<T>
         Ok(())
     }
 
-    fn postamble(&mut self) -> Result<()> {
+    fn func_preamble(&mut self, ident: &str) -> Result<()> {
+        let preamble = FUNC_PREAMBLE.replace("{name}", ident);
+        write!(self.output, "{}", preamble)?;
+        Ok(())
+    }
+
+    fn func_postamble(&mut self) -> Result<()> {
         write!(self.output, "{}", POSTAMBLE)?;
         Ok(())
     }

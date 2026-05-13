@@ -11,7 +11,8 @@ pub trait CodeBackend {
 
     fn free_all_registers(&mut self) -> Result<()>;
     fn preamble(&mut self) -> Result<()>;
-    fn postamble(&mut self) -> Result<()>;
+    fn func_postamble(&mut self) -> Result<()>;
+    fn func_preamble(&mut self, ident: &str) -> Result<()>;
     fn load_int(&mut self, val: i64) -> Result<Self::Reg>;
     fn load_glob(&mut self, ident: &str) -> Result<Self::Reg>;
     fn store_glob(&mut self, r: Self::Reg, ident: &str) -> Result<Self::Reg>;
@@ -130,12 +131,24 @@ where
         Ok(None)
     }
 
+    pub fn gen_function(&mut self, tree: &Tree<AstNode>, node: &AstNode) -> Result<Option<B::Reg>> {
+        if let Ast::Function(ident) = &node.op {
+            self.backend.func_preamble(ident)?;
+            self.gen_ast(tree, node.get_left_index(), None, Some(&node.op), 0)?;
+            self.backend.func_postamble()?;
+        } else {
+            unreachable!("Generating a function without a root Ast::Function should be impossible")
+        }
+        Ok(None)
+    }
+
 
     pub fn gen_ast(&mut self, tree: &Tree<AstNode>, node_index: Option<usize>, r: Option<B::Reg>, parent_op: Option<&Ast>, label: usize) -> Result<Option<B::Reg>> {
         let root = tree.get_root_or_node(node_index).unwrap();
 
         // Special handling for statements
         match &root.op {
+            Ast::Function(_) => self.gen_function(tree, root),
             Ast::If => self.gen_if(tree, root),
             Ast::While => self.gen_while(tree, root),
             Ast::Print => self.gen_print(tree, root),
@@ -170,10 +183,6 @@ where
 
     pub fn gen_preamble(&mut self) -> Result<()> {
         self.backend.preamble()
-    }
-
-    pub fn gen_postamble(&mut self) -> Result<()> {
-        self.backend.postamble()
     }
 
     pub fn gen_freeregs(&mut self) -> Result<()> {

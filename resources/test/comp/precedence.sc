@@ -1,2 +1,4 @@
-int x;
-x = 1 + 2 * 3; print x;
+void main() {
+  int x;
+  x = 1 + 2 * 3; print x;
+}

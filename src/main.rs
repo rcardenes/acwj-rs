@@ -25,11 +25,14 @@ fn main() -> Result<()> {
 
     let mut symbols = SymbolTable::new();
     let mut parser = Parser::new(&scanner, &mut symbols);
-    // Generate AST
+    // Generate code and AST on the fly
+    // Traverse the AST to generate code
     code_gen.gen_preamble()?;
-    let tree = parser.compound_statement()?;
-    code_gen.gen_ast(&tree, None, None, None, 0)?;
-    code_gen.gen_postamble()?;
+
+    while let Some(tree) = parser.function_declaration()? {
+        code_gen.gen_ast(&tree, None, None, None, 0)?;
+
+    }
 
     Ok(())
 }

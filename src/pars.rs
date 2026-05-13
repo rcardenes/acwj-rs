@@ -18,6 +18,7 @@ use crate::{
  *      |     assignment_statement
  *      |     if_statement
  *      |     while_statement
+ *      |     for_statement
  *      ;
  *
  * print_statement: 'print' expression ';'  ;
@@ -40,6 +41,8 @@ use crate::{
  *
  * preop_statement:  statement  ;        (for now)
  * postop_statement: statement  ;        (for now)
+ *
+ * function_declaration: 'void' identifier '(' ')' compound_statement   ;
  *
  * identifier: T_IDENT ;
  */
@@ -194,6 +197,25 @@ where T: std::io::Read,
         Ok(tree)
     }
 
+    pub fn function_declaration(&mut self) -> Result<Option<ParseTree>> {
+        if let Some(t) = self.scanner.scan() {
+            if t != Token::Void {
+                bail!("Expected function declaration, found {}", t);
+            }
+
+            let ident = self.scanner.ident();
+            self.symbols.add_glob(&ident);
+            self.scanner.lparen();
+            self.scanner.rparen();
+            let tree = self.compound_statement()?
+                           .new_root(AstNode::make_leaf(Ast::Function(ident)));
+            Ok(Some(tree))
+        } else {
+            Ok(None)
+        }
+
+    }
+
     pub fn single_statement(&mut self) -> Result<ParseTree> {
         match self.scanner.scan() {
             Some(Token::Print) => self.print_statement(),
@@ -225,7 +247,10 @@ where T: std::io::Read,
                 bail!("Found integer while expecting a statment, at line {}", self.scanner.get_line())
             }
             Some(Token::RightBrace) => panic!("Expected statement, found '}}'"),
-            Some(Token::Semi) => panic!("Expected statement, found 'l'"), // A semicolon on its own equals an empty statement
+            // A semicolon on its own equals an empty statement
+            Some(Token::Semi) => panic!("Expected statement, found ';'"),
+            // Only for function declarations right now
+            Some(Token::Void) => panic!("Expected statement, found 'void'"),
             None => { panic!("EOF found while expecting a statement") }
         }
     }

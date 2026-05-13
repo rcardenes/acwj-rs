@@ -17,6 +17,8 @@ pub enum Ast {
     IntLit(i64),
     Ident(String),
     LvIdent(String),
+    // Declarations
+    Function(String),
     // Statements
     GlobalDec(String),
     Assign,

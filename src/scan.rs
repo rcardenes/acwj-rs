@@ -32,6 +32,7 @@ pub enum Token {
     If,            // if
     Int,           // int
     Print,         // print
+    Void,          // void
     While,         // while
     IntLit(i64),   // Integer literal
 }
@@ -49,6 +50,7 @@ static KEYWORDS: &[(&str, Token)] = &[
     ("if", Token::If),
     ("int", Token::Int),
     ("print", Token::Print),
+    ("void", Token::Void),
     ("while", Token::While),
 ];
 
