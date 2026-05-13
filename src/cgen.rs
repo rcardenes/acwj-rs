@@ -61,7 +61,7 @@ where
             }
         }
 
-    pub fn gen_if_ast(&mut self, tree: &Tree<AstNode>, node: &AstNode) -> Result<Option<B::Reg>> {
+    pub fn gen_if(&mut self, tree: &Tree<AstNode>, node: &AstNode) -> Result<Option<B::Reg>> {
         let l_false = self.label();
         let right_idx = node.get_right_index();
         let l_end = right_idx.map(|_| self.label());
@@ -90,13 +90,34 @@ where
         Ok(None)
     }
 
-    pub fn gen_print_ast(&mut self, tree: &Tree<AstNode>, node: &AstNode) -> Result<Option<B::Reg>> {
+    pub fn gen_while(&mut self, tree: &Tree<AstNode>, node: &AstNode) -> Result<Option<B::Reg>> {
+        let l_start = self.label();
+        let l_end = self.label();
+
+        self.backend.label(l_start)?;
+
+        // Generate the condition code, with a jump to the "end" label when the condition fails
+        self.gen_ast(tree, node.get_left_index(), None, Some(&node.op), l_end)?;
+        self.backend.free_all_registers()?;
+
+        // Generate the body
+        self.gen_ast(tree, node.get_right_index(), None, Some(&node.op), 0)?;
+        self.backend.free_all_registers()?;
+        // And back to start to test the condition again
+        self.backend.jump(l_start)?;
+
+        self.backend.label(l_end)?;
+
+        Ok(None)
+    }
+
+    pub fn gen_print(&mut self, tree: &Tree<AstNode>, node: &AstNode) -> Result<Option<B::Reg>> {
         match self.gen_ast(tree, node.get_left_index(), None, None, 0)? {
             Some(reg) => {
                 self.backend.print_int(reg)?;
                 self.backend.free_all_registers()?;
             }
-            None => unreachable!("gen_print_ast: the expression returned no register")
+            None => unreachable!("gen_print: the expression returned no register")
         }
         Ok(None)
     }
@@ -115,8 +136,9 @@ where
 
         // Special handling for statements
         match &root.op {
-            Ast::If => self.gen_if_ast(tree, root),
-            Ast::Print => self.gen_print_ast(tree, root),
+            Ast::If => self.gen_if(tree, root),
+            Ast::While => self.gen_while(tree, root),
+            Ast::Print => self.gen_print(tree, root),
             Ast::Glue => self.gen_glue_ast(tree, root),
             Ast::Add => self.binary(tree, root, |cg, r1, r2| cg.add(r1, r2)),
             Ast::Subtract => self.binary(tree, root, |cg, r1, r2| cg.sub(r1, r2)),
@@ -126,7 +148,7 @@ where
                 |Ast::LessThan|Ast::GreaterThan
                 |Ast::LessThanOrEqual
                 |Ast::GreaterThanOrEqual => {
-                    if parent_op == Some(&Ast::If) {
+                    if parent_op.is_some_and(Ast::is_loop_with_comparison) {
                         self.binary(tree, root, 
                             |cg: &mut B, r1, r2| cg.compare_and_jump(&root.op, r1, r2, label))
                     } else {

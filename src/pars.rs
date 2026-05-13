@@ -98,6 +98,31 @@ where T: std::io::Read,
         Ok(t)
     }
 
+    fn while_statement(&mut self) -> Result<ParseTree> {
+        self.scanner.lparen();
+
+        let condition = binexpr(self.scanner, 0)?;
+
+        // Temporarily limit the "if" condition to comparisons
+        match condition.get_root() {
+            Some(root) => {
+                if !root.op.is_comparison() {
+                    self.scanner.fatal("Bad comparison operator");
+                }
+            },
+            None => unreachable!("Binary expression tree without a root!"),
+        }
+
+        self.scanner.rparen();
+
+        let (t, right_idx) = condition.concat(self.compound_statement()?);
+        let root = AstNode::make_leaf(Ast::While);
+        Ok(match right_idx {
+            Some(idx) => t.new_root_with_right_idx(root, idx),
+            None => t.new_root(root)
+        })
+    }
+
     pub fn compound_statement(&mut self) -> Result<ParseTree> {
         self.scanner.lbrace();
 
@@ -109,6 +134,7 @@ where T: std::io::Read,
                 Token::Int => self.var_declaration(t)?,
                 Token::Ident(id) => self.assignment_statement(id)?,
                 Token::If => self.if_statement()?,
+                Token::While => self.while_statement()?,
                 Token::RightBrace => {
                     return Ok(left.unwrap_or(Tree::empty()));
                 },

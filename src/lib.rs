@@ -3,7 +3,7 @@ pub mod cg;
 pub mod expr;
 pub mod cgen;
 pub mod scan;
-pub mod stmt;
+pub mod pars;
 pub mod sym;
 pub mod tree;
 

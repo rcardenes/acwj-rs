@@ -5,25 +5,28 @@ use crate::tree::IndexableNode;
  *      |      '{' statement '}'
  *      |      '{' statement statements '}'
  *      ;
-
+ *
  * statement: print_statement
  *      |     declaration
  *      |     assignment_statement
  *      |     if_statement
+ *      |     while_statement
  *      ;
-
+ *
  * print_statement: 'print' expression ';'  ;
-
+ *
  * declaration: 'int' identifier ';'  ;
-
+ *
  * assignment_statement: identifier '=' expression ';'   ;
-
+ *
  * if_statement: if_head
  *      |        if_head 'else' compound_statement
  *      ;
-
+ *
  * if_head: 'if' '(' true_false_expression ')' compound_statement  ;
-
+ *
+ * while_statement: 'while' '(' true_false_expression ')' compound_statement  ;
+ *
  * identifier: T_IDENT ;
  */
 
@@ -49,6 +52,7 @@ pub enum Ast {
     Assign,
     Glue,
     If,
+    While,
     Print,
 }
 
@@ -61,6 +65,10 @@ impl Ast {
         matches!(self, Ast::Equal|Ast::NotEqual
                 |Ast::LessThan|Ast::LessThanOrEqual
                 |Ast::GreaterThan|Ast::GreaterThanOrEqual)
+    }
+
+    pub fn is_loop_with_comparison(&self) -> bool {
+        matches!(self, Ast::If|Ast::While)
     }
 }
 

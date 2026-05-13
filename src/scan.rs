@@ -31,6 +31,7 @@ pub enum Token {
     If,            // if
     Int,           // int
     Print,         // print
+    While,         // while
     IntLit(i64),   // Integer literal
 }
 
@@ -46,6 +47,7 @@ static KEYWORDS: &[(&str, Token)] = &[
     ("if", Token::If),
     ("int", Token::Int),
     ("print", Token::Print),
+    ("while", Token::While),
 ];
 
 fn is_valid_ident_char(c: char) -> bool {

@@ -5,7 +5,7 @@ use acwj_rs::{
     cg::X864_64Backend,
     cgen::CodeGenerator,
     sym::SymbolTable,
-    stmt::Parser,
+    pars::Parser,
 };
 
 #[derive(ClapParser, Debug)]
