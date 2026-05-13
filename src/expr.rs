@@ -38,6 +38,19 @@ pub fn primary<T>(scanner: &Scanner<T>) -> AstNode
     }
 }
 
+pub fn is_arithop(token: &Token) -> bool {
+    matches!(token, Token::Plus
+            |Token::Minus
+            |Token::Star
+            |Token::Slash
+            |Token::EQ
+            |Token::NE
+            |Token::LT
+            |Token::LE
+            |Token::GT
+            |Token::GE)
+}
+
 pub fn arithop<T>(scanner: &Scanner<T>, token: Token) -> Ast
     where T: std::io::Read
 {
@@ -64,7 +77,7 @@ pub fn binexpr<T>(scanner: &Scanner<T>, ptp: Precedence) -> Result<Tree<AstNode>
     let mut left = Tree::new(primary(scanner));
 
     while let Some(token) = scanner.scan() {
-        if token == Token::Semi {
+        if !is_arithop(&token) {
             scanner.putback_token(token);
             break;
         }
@@ -79,7 +92,7 @@ pub fn binexpr<T>(scanner: &Scanner<T>, ptp: Precedence) -> Result<Tree<AstNode>
         let right = binexpr(scanner, curr_prec)?;
 
         let (new_tree, right_root) = left.concat(right);
-        left = new_tree.new_root_with_right_idx(AstNode::make_leaf(node_type), right_root);
+        left = new_tree.new_root_with_right_idx(AstNode::make_leaf(node_type), right_root.unwrap());
             // AstNode::new(arithop(scanner, token), Some(left), Some(right));
     }
 

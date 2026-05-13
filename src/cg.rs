@@ -1,10 +1,14 @@
 use std::{
     collections::HashMap,
     fmt,
-    io::Write
+    io::Write,
+    sync::LazyLock,
 };
 use anyhow::Result;
-use crate::cgen::CodeBackend;
+use crate::{
+    ast::Ast,
+    cgen::CodeBackend
+};
 
 static PREAMBLE: &str = "
 \t.text
@@ -85,6 +89,42 @@ impl fmt::Display for X86_64Reg8b {
     }
 }
 
+static CMP_TO_JMP_INSTRUCTIONS: LazyLock<HashMap<Ast, &'static str>> = LazyLock::new(|| {
+    HashMap::from([
+        (Ast::Equal, "jne"),
+        (Ast::NotEqual, "je"),
+        (Ast::LessThan, "jge"),
+        (Ast::LessThanOrEqual, "jg"),
+        (Ast::GreaterThan, "jle"),
+        (Ast::GreaterThanOrEqual, "jl"),
+    ])
+});
+
+static CMP_TO_SET_INSTRUCTIONS: LazyLock<HashMap<Ast, &'static str>> = LazyLock::new(|| {
+    HashMap::from([
+        (Ast::Equal, "sete"),
+        (Ast::NotEqual, "setne"),
+        (Ast::LessThan, "setl"),
+        (Ast::LessThanOrEqual, "setle"),
+        (Ast::GreaterThan, "setg"),
+        (Ast::GreaterThanOrEqual, "setge"),
+    ])
+});
+
+fn ast_to_jmp_op(op: &Ast) -> &'static str {
+    match CMP_TO_JMP_INSTRUCTIONS.get(op) {
+        Some(instr) => instr,
+        None => panic!("Not a comparison operator: {:?}", op)
+    }
+}
+
+fn ast_to_set_op(op: &Ast) -> &'static str {
+    match CMP_TO_SET_INSTRUCTIONS.get(op) {
+        Some(instr) => instr,
+        None => panic!("Not a comparison operator: {:?}", op)
+    }
+}
+
 pub struct X864_64Backend<T>
     where T: Write
 {
@@ -119,15 +159,6 @@ impl<T> X864_64Backend<T>
             }
         }
         panic!("Out of registers!")
-    }
-
-    fn compare(&mut self, r1: X86_64Reg, r2: X86_64Reg, how: &str) -> Result<X86_64Reg> {
-        writeln!(self.output, "\tcmpq\t{}, {}", r2, r1)?;
-        writeln!(self.output, "\t{}\t{}", how, r2.as_8b())?;
-        writeln!(self.output, "\tandq\t$255, {}", r2)?;
-        self.free_register(r1);
-
-        Ok(r2)
     }
 }
 
@@ -185,71 +216,70 @@ impl<T> CodeBackend for X864_64Backend<T>
 
     // Add two registers together and return
     // the number of the register with the result
-    fn add(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Self::Reg> {
+    fn add(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Option<Self::Reg>> {
         writeln!(self.output, "\taddq\t{}, {}", r1, r2)?;
         self.free_register(r1);
 
-        Ok(r2)
+        Ok(Some(r2))
     }
 
     // Subtract the second register from the first and
     // return the number of the register with the result
-    fn sub(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Self::Reg> {
+    fn sub(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Option<Self::Reg>> {
         writeln!(self.output, "\tsubq\t{}, {}", r2, r1)?;
         self.free_register(r2);
 
-        Ok(r1)
+        Ok(Some(r1))
     }
 
     // Multiply two registers together and return
     // the number of the register with the result
-    fn mul(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Self::Reg> {
+    fn mul(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Option<Self::Reg>> {
         writeln!(self.output, "\timulq\t{}, {}", r1, r2)?;
         self.free_register(r1);
 
-        Ok(r2)
+        Ok(Some(r2))
     }
 
     // Divide the first register by the second and
     // regurn the number of the register with the result
-    fn div(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Self::Reg> {
+    fn div(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Option<Self::Reg>> {
         writeln!(self.output, "\tmovq\t{r1}, %rax")?;
         writeln!(self.output, "\tcqo")?;
         writeln!(self.output, "\tidivq\t{r2}")?;
         writeln!(self.output, "\tmovq\t%rax, {r1}")?;
         self.free_register(r2);
 
-        Ok(r1)
+        Ok(Some(r1))
     }
 
-    // Tests if r1 == r2; places result in r2
-    fn eq(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Self::Reg> {
-        self.compare(r1, r2, "sete")
+    fn label(&mut self, label_num: usize) -> Result<()> {
+        writeln!(self.output, "L{}:", label_num)?;
+        Ok(())
     }
 
-    // Tests if r1 != r2; places result in r2
-    fn ne(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Self::Reg> {
-        self.compare(r1, r2, "setne")
+    fn jump(&mut self, label_num: usize) -> Result<()> {
+        writeln!(self.output, "\tjmp\tL{}", label_num)?;
+        Ok(())
     }
 
-    // Tests if r1 < r2; places result in r2
-    fn lt(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Self::Reg> {
-        self.compare(r1, r2, "setl")
+    fn compare_and_set(&mut self, op: &Ast, r1: Self::Reg, r2: Self::Reg) -> Result<Option<Self::Reg>> {
+        let r2_8b = r2.as_8b();
+
+        writeln!(self.output, "\tcmpq\t{}, {}", r2, r1)?;
+        writeln!(self.output, "\t{}\t{}", ast_to_set_op(op), r2_8b)?;
+        writeln!(self.output, "\tmovzbq\t{}, {}", r2_8b, r2)?;
+        self.free_register(r1);
+
+        Ok(Some(r2))
     }
 
-    // Tests if r1 <= r2; places result in r2
-    fn le(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Self::Reg> {
-        self.compare(r1, r2, "setle")
-    }
+    fn compare_and_jump(&mut self, op: &Ast, r1: Self::Reg, r2: Self::Reg, label_num: usize) -> Result<Option<Self::Reg>> {
+        writeln!(self.output, "\tcmpq\t{}, {}", r2, r1)?;
+        writeln!(self.output, "\t{}\tL{}", ast_to_jmp_op(op), label_num)?;
+        self.free_all_registers()?;
 
-    // Tests if r1 < r2; places result in r2
-    fn gt(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Self::Reg> {
-        self.compare(r1, r2, "setg")
-    }
-
-    // Tests if r1 <= r2; places result in r2
-    fn ge(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Self::Reg> {
-        self.compare(r1, r2, "setge")
+        Ok(None)
     }
 
 

@@ -22,7 +22,13 @@ pub enum Token {
     LE,            // <=
     GE,            // >=
     Ident(String), // identifier
+    LeftBrace,     // {
+    RightBrace,    // }
+    LeftParen,     // (
+    RightParen,    // )
     Semi,          // ;
+    Else,          // else
+    If,            // if
     Int,           // int
     Print,         // print
     IntLit(i64),   // Integer literal
@@ -36,6 +42,8 @@ impl fmt::Display for Token {
 }
 
 static KEYWORDS: &[(&str, Token)] = &[
+    ("else", Token::Else),
+    ("if", Token::If),
     ("int", Token::Int),
     ("print", Token::Print),
 ];
@@ -71,6 +79,10 @@ where T: Read
             Some(t)
         } else {
             match self.skip()? {
+                '(' => Some(Token::LeftParen),
+                ')' => Some(Token::RightParen),
+                '{' => Some(Token::LeftBrace),
+                '}' => Some(Token::RightBrace),
                 '+' => Some(Token::Plus),
                 '-' => Some(Token::Minus),
                 '*' => Some(Token::Star),
@@ -263,8 +275,34 @@ where T: Read
         }
     }
 
+    pub fn maybe_token(&self, token: Token) -> bool {
+        match self.scan() {
+            Some(tok) => {
+                if tok == token {
+                    true
+                } else {
+                    self.putback_token(tok);
+                    false
+                }
+            },
+            None => panic!("End of input while expecting {token}"),
+        }
+    }
+
     pub fn semi(&self) -> Token {
         self.matches(Token::Semi, ";")
+    }
+
+    pub fn lbrace(&self) -> Token {
+        self.matches(Token::LeftBrace, "{")
+    }
+
+    pub fn lparen(&self) -> Token {
+        self.matches(Token::LeftParen, "(")
+    }
+
+    pub fn rparen(&self) -> Token {
+        self.matches(Token::RightParen, ")")
     }
 
     pub fn fatal(&self, error_msg: &str) -> ! {

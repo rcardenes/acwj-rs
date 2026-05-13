@@ -23,13 +23,12 @@ fn main() -> Result<()> {
     let output = std::fs::File::create(args.output)?;
     let mut code_gen = CodeGenerator::new(X864_64Backend::new(output));
 
-    code_gen.gen_preamble()?;
-
     let mut symbols = SymbolTable::new();
-    let mut parser = Parser::new(&scanner, &mut code_gen, &mut symbols);
-    // Generate code
-    parser.statements()?;
-
+    let mut parser = Parser::new(&scanner, &mut symbols);
+    // Generate AST
+    code_gen.gen_preamble()?;
+    let tree = parser.compound_statement()?;
+    code_gen.gen_ast(&tree, None, None, None, 0)?;
     code_gen.gen_postamble()?;
 
     Ok(())
