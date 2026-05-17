@@ -30,7 +30,7 @@ fn main() -> Result<()> {
     code_gen.gen_preamble()?;
 
     while let Some(tree) = parser.function_declaration()? {
-        code_gen.gen_ast(&tree, None, None, None, 0)?;
+        code_gen.gen_ast(&tree, None, None, 0)?;
 
     }
 

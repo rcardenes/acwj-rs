@@ -1,10 +1,7 @@
 // Given an AST, generate code recursively
 
 use anyhow::Result;
-use crate::{
-    ast::{Ast, AstNode},
-    tree::{IndexableNode, Tree},
-};
+use crate::ast::{AstNode, Identifier};
 
 pub trait CodeBackend {
     type Reg: Copy;
@@ -21,8 +18,8 @@ pub trait CodeBackend {
     fn sub(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Option<Self::Reg>>;
     fn mul(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Option<Self::Reg>>;
     fn div(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Option<Self::Reg>>;
-    fn compare_and_set(&mut self, op: &Ast, r1: Self::Reg, r2: Self::Reg) -> Result<Option<Self::Reg>>;
-    fn compare_and_jump(&mut self, op: &Ast, r1: Self::Reg, r2: Self::Reg, label_num: usize) -> Result<Option<Self::Reg>>;
+    fn compare_and_set(&mut self, op: &AstNode, r1: Self::Reg, r2: Self::Reg) -> Result<Option<Self::Reg>>;
+    fn compare_and_jump(&mut self, op: &AstNode, r1: Self::Reg, r2: Self::Reg, label_num: usize) -> Result<Option<Self::Reg>>;
     fn label(&mut self, label_num: usize) -> Result<()>;
     fn jump(&mut self, label_num: usize) -> Result<()>;
     fn print_int(&mut self, r: Self::Reg) -> Result<()>;
@@ -49,11 +46,11 @@ where
         self.last_label
     }
 
-    fn binary<F>(&mut self, tree: &Tree<AstNode>, node: &AstNode, func: F) -> Result<Option<B::Reg>>
+    fn binary<F>(&mut self, op: &AstNode, left: &AstNode, right: &AstNode, func: F) -> Result<Option<B::Reg>>
         where F: FnOnce(&mut B, B::Reg, B::Reg) -> Result<Option<B::Reg>>,
         {
-            let left_reg = self.gen_ast(tree, node.get_left_index(), None, Some(&node.op), 0)?;
-            let right_reg = self.gen_ast(tree, node.get_right_index(), left_reg, Some(&node.op), 0)?;
+            let left_reg = self.gen_ast(left, None, Some(op), 0)?;
+            let right_reg = self.gen_ast(right, left_reg, Some(op), 0)?;
             match (left_reg, right_reg) {
                 (Some(lr), Some(rr)) => {
                     func(&mut self.backend, lr, rr)
@@ -62,79 +59,102 @@ where
             }
         }
 
-    pub fn gen_if(&mut self, tree: &Tree<AstNode>, node: &AstNode) -> Result<Option<B::Reg>> {
-        let l_false = self.label();
-        let right_idx = node.get_right_index();
-        let l_end = right_idx.map(|_| self.label());
+    pub fn gen_if(&mut self, tree: &AstNode) -> Result<Option<B::Reg>> {
+        if let AstNode::If { cond, branch_t, branch_f } = tree {
+            let l_false = self.label();
+            let l_end = branch_f.as_ref().map(|_| self.label());
 
-        // Generate the condition code. It will include a conditional jump to the
-        // false branch
-        self.gen_ast(tree, node.get_left_index(), None, Some(&node.op), l_false)?;
-        self.backend.free_all_registers()?;
-
-        // Generate the code for the true branch
-        self.gen_ast(tree, node.get_mid_index(), None, Some(&node.op), 0)?;
-        self.backend.free_all_registers()?;
-        // If we generated an "end" clause, now it's the time to jump
-        if let Some(label) = l_end { self.backend.jump(label)?; }
-
-        // Now, the false label, which will be serve as "end" if there's no false branch,
-        self.backend.label(l_false)?;
-
-        if let Some(idx) = right_idx {
-            self.gen_ast(tree, Some(idx), None, Some(&node.op), 0)?;
+            // Generate the condition code. It will include a conditional jump to the
+            // false branch
+            self.gen_ast(cond, None, Some(tree), l_false)?;
             self.backend.free_all_registers()?;
-            // We're sure that l_end was generated, so we're safe just unwrapping
-            self.backend.label(l_end.unwrap())?;
-        }
 
-        Ok(None)
-    }
+            // Generate the code for the true branch
+            self.gen_ast(branch_t, None, Some(tree), 0)?;
+            self.backend.free_all_registers()?;
 
-    pub fn gen_while(&mut self, tree: &Tree<AstNode>, node: &AstNode) -> Result<Option<B::Reg>> {
-        let l_start = self.label();
-        let l_end = self.label();
+            // If we generated an "end" clause, now it's the time to jump
+            if let Some(label) = l_end { self.backend.jump(label)?; }
 
-        self.backend.label(l_start)?;
+            // Now, the false label, which will serve as "end" if there's no false branch,
+            self.backend.label(l_false)?;
 
-        // Generate the condition code, with a jump to the "end" label when the condition fails
-        self.gen_ast(tree, node.get_left_index(), None, Some(&node.op), l_end)?;
-        self.backend.free_all_registers()?;
-
-        // Generate the body
-        self.gen_ast(tree, node.get_right_index(), None, Some(&node.op), 0)?;
-        self.backend.free_all_registers()?;
-        // And back to start to test the condition again
-        self.backend.jump(l_start)?;
-
-        self.backend.label(l_end)?;
-
-        Ok(None)
-    }
-
-    pub fn gen_print(&mut self, tree: &Tree<AstNode>, node: &AstNode) -> Result<Option<B::Reg>> {
-        match self.gen_ast(tree, node.get_left_index(), None, None, 0)? {
-            Some(reg) => {
-                self.backend.print_int(reg)?;
+            if let Some(branch_f) = branch_f {
+                self.gen_ast(branch_f, None, Some(tree), 0)?;
                 self.backend.free_all_registers()?;
+                // We're sure that l_end was generated, so we're safe just unwrapping
+                self.backend.label(l_end.unwrap())?;
             }
-            None => unreachable!("gen_print: the expression returned no register")
+        } else {
+            unreachable!("Invalid input for gen_if!")
         }
+
         Ok(None)
     }
 
-    pub fn gen_glue_ast(&mut self, tree: &Tree<AstNode>, node: &AstNode) -> Result<Option<B::Reg>> {
-        let _ = self.gen_ast(tree, node.get_left_index(), None, Some(&Ast::Glue), 0)?;
-        self.backend.free_all_registers()?;
-        let _ = self.gen_ast(tree, node.get_right_index(), None, Some(&Ast::Glue), 0)?;
-        self.backend.free_all_registers()?;
+    pub fn gen_while(&mut self, tree: &AstNode) -> Result<Option<B::Reg>> {
+        if let AstNode::While { cond, body } = tree {
+            let l_start = self.label();
+            let l_end = self.label();
+
+            self.backend.label(l_start)?;
+
+            // Generate the condition code, with a jump to the "end" label when the condition fails
+            self.gen_ast(cond, None, Some(tree), l_end)?;
+            self.backend.free_all_registers()?;
+
+            // Generate the body
+            self.gen_ast(body, None, Some(tree), 0)?;
+            self.backend.free_all_registers()?;
+            // And back to start to test the condition again
+            self.backend.jump(l_start)?;
+
+            self.backend.label(l_end)?;
+        } else {
+            unreachable!("Invalid input for gen_while!")
+        }
+
         Ok(None)
     }
 
-    pub fn gen_function(&mut self, tree: &Tree<AstNode>, node: &AstNode) -> Result<Option<B::Reg>> {
-        if let Ast::Function(ident) = &node.op {
-            self.backend.func_preamble(ident)?;
-            self.gen_ast(tree, node.get_left_index(), None, Some(&node.op), 0)?;
+    pub fn gen_print(&mut self, tree: &AstNode) -> Result<Option<B::Reg>> {
+        if let AstNode::Print { expr } = tree {
+            match self.gen_ast(expr, None, None, 0)? {
+                Some(reg) => {
+                    self.backend.print_int(reg)?;
+                    self.backend.free_all_registers()?;
+                }
+                None => unreachable!("gen_print: the expression returned no register")
+            }
+        } else {
+            unreachable!("Invalid input for gen_print!")
+        }
+
+        Ok(None)
+    }
+
+    pub fn gen_glue_ast(&mut self, tree: &AstNode) -> Result<Option<B::Reg>> {
+        if let AstNode::Glue { left, right } = tree {
+            let _ = self.gen_ast(left, None, Some(tree), 0)?;
+            self.backend.free_all_registers()?;
+            let _ = self.gen_ast(right, None, Some(tree), 0)?;
+            self.backend.free_all_registers()?;
+        } else {
+            unreachable!("Invalid input for gen_glue_ast!")
+        }
+
+        Ok(None)
+    }
+
+    pub fn gen_function(&mut self, tree: &AstNode) -> Result<Option<B::Reg>> {
+        if let AstNode::Function { name, body } = tree {
+            match &**name {
+                AstNode::Ident(id) => {
+                    self.backend.func_preamble(&id.name)?;
+                },
+                _ => unreachable!("Function with invalid id: {:?}", name)
+            };
+            self.gen_ast(body, None, Some(tree), 0)?;
             self.backend.func_postamble()?;
         } else {
             unreachable!("Generating a function without a root Ast::Function should be impossible")
@@ -143,40 +163,38 @@ where
     }
 
 
-    pub fn gen_ast(&mut self, tree: &Tree<AstNode>, node_index: Option<usize>, r: Option<B::Reg>, parent_op: Option<&Ast>, label: usize) -> Result<Option<B::Reg>> {
-        let root = tree.get_root_or_node(node_index).unwrap();
-
-        // Special handling for statements
-        match &root.op {
-            Ast::Function(_) => self.gen_function(tree, root),
-            Ast::If => self.gen_if(tree, root),
-            Ast::While => self.gen_while(tree, root),
-            Ast::Print => self.gen_print(tree, root),
-            Ast::Glue => self.gen_glue_ast(tree, root),
-            Ast::Add => self.binary(tree, root, |cg, r1, r2| cg.add(r1, r2)),
-            Ast::Subtract => self.binary(tree, root, |cg, r1, r2| cg.sub(r1, r2)),
-            Ast::Multiply => self.binary(tree, root, |cg, r1, r2| cg.mul(r1, r2)),
-            Ast::Divide => self.binary(tree, root, |cg, r1, r2| cg.div(r1, r2)),
-            Ast::Equal|Ast::NotEqual
-                |Ast::LessThan|Ast::GreaterThan
-                |Ast::LessThanOrEqual
-                |Ast::GreaterThanOrEqual => {
-                    if parent_op.is_some_and(Ast::is_loop_with_comparison) {
-                        self.binary(tree, root, 
-                            |cg: &mut B, r1, r2| cg.compare_and_jump(&root.op, r1, r2, label))
+    pub fn gen_ast(&mut self, tree: &AstNode, r: Option<B::Reg>, parent_op: Option<&AstNode>, label: usize) -> Result<Option<B::Reg>> {
+        match tree {
+            AstNode::Empty => Ok(None), // We shouldn't see empty statements, but simply skip it
+            AstNode::Function {..} => self.gen_function(tree),
+            AstNode::If {..} => self.gen_if(tree),
+            AstNode::While {..} => self.gen_while(tree),
+            AstNode::Print {..} => self.gen_print(tree),
+            AstNode::Glue {..} => self.gen_glue_ast(tree),
+            AstNode::Add { left, right } => self.binary(tree, left, right, |cg, r1, r2| cg.add(r1, r2)),
+            AstNode::Subtract { left, right } => self.binary(tree, left, right, |cg, r1, r2| cg.sub(r1, r2)),
+            AstNode::Multiply { left, right } => self.binary(tree, left, right, |cg, r1, r2| cg.mul(r1, r2)),
+            AstNode::Divide { left, right } => self.binary(tree, left, right, |cg, r1, r2| cg.div(r1, r2)),
+            AstNode::Equal { left, right }|AstNode::NotEqual { left, right }
+                |AstNode::LessThan { left, right }|AstNode::GreaterThan { left, right }
+                |AstNode::LessThanOrEqual { left, right }
+                |AstNode::GreaterThanOrEqual { left, right } => {
+                    if parent_op.is_some_and(AstNode::is_branching_stmt) {
+                        self.binary(tree, left, right,
+                            |cg: &mut B, r1, r2| cg.compare_and_jump(tree, r1, r2, label))
                     } else {
-                        self.binary(tree, root, 
-                            |cg: &mut B, r1, r2| cg.compare_and_set(&root.op, r1, r2))
+                        self.binary(tree, left, right,
+                            |cg: &mut B, r1, r2| cg.compare_and_set(tree, r1, r2))
                     }
                 },
-            Ast::IntLit(val) => self.backend.load_int(*val).map(Some),
-            Ast::Ident(id) => self.backend.load_glob(id).map(Some),
-            Ast::LvIdent(id) => self.backend.store_glob(r.unwrap(), id).map(Some),
+            AstNode::IntLit(val) => self.backend.load_int(*val).map(Some),
+            AstNode::Ident(Identifier { name }) => self.backend.load_glob(&name).map(Some),
+            AstNode::LvIdent(Identifier { name }) => self.backend.store_glob(r.unwrap(), &name).map(Some),
             // For Assign, all the work is done by the code generation down its branches.
             // We need only to return the right-branch register
-            Ast::Assign => self.binary(tree, root, |_, _, r2| Ok(Some(r2))),
-            Ast::GlobalDec(id) => {
-                self.backend.glob_sym(id).map(|_| None)
+            AstNode::Assign { id, expr } => self.binary(tree, expr, id, |_, _, r2| Ok(Some(r2))),
+            AstNode::GlobalDec { id: Identifier { name }} => {
+                self.backend.glob_sym(&name).map(|_| None)
             }
         }
     }

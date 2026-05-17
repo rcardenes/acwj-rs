@@ -1,11 +1,10 @@
 use anyhow::{Result, bail};
 use crate::{
-    ast::{Ast, AstNode},
+    ast::AstNode,
     scan::{Scanner, Token},
-    tree::Tree,
 };
 
-type Precedence = u8;
+type Precedence = i16;
 
 /// Return numeric precence for the different tokens, so that we
 /// can use it in a Pratt-style parser.
@@ -29,8 +28,8 @@ pub fn primary<T>(scanner: &Scanner<T>) -> AstNode
 
     if let Some(token) = scanner.scan() {
         match &token {
-            Token::IntLit(val) => AstNode::make_leaf(Ast::IntLit(*val)),
-            Token::Ident(id) => AstNode::make_leaf(Ast::Ident(id.into())),
+            Token::IntLit(val) => AstNode::IntLit(*val),
+            Token::Ident(id) => AstNode::make_ident(id),
             _ => scanner.fatal_extra("Syntax error, token", token)
         }
     } else {
@@ -51,30 +50,12 @@ pub fn is_arithop(token: &Token) -> bool {
             |Token::GE)
 }
 
-pub fn arithop<T>(scanner: &Scanner<T>, token: Token) -> Ast
-    where T: std::io::Read
-{
-    match token {
-        Token::Plus => Ast::Add,
-        Token::Minus => Ast::Subtract,
-        Token::Star => Ast::Multiply,
-        Token::Slash => Ast::Divide,
-        Token::EQ => Ast::Equal,
-        Token::NE => Ast::NotEqual,
-        Token::LT => Ast::LessThan,
-        Token::LE => Ast::LessThanOrEqual,
-        Token::GT => Ast::GreaterThan,
-        Token::GE => Ast::GreaterThanOrEqual,
-        _ => scanner.fatal_extra("Syntax error, token", token)
-    }
-}
-
 // Return an AST tree whose root is a binary operator.
 // ptp is the precedence of the previous token
-pub fn binexpr<T>(scanner: &Scanner<T>, ptp: Precedence) -> Result<Tree<AstNode>>
+pub fn binexpr<T>(scanner: &Scanner<T>, ptp: Precedence) -> Result<AstNode>
     where T: std::io::Read,
 {
-    let mut left = Tree::new(primary(scanner));
+    let mut left = primary(scanner);
 
     while let Some(token) = scanner.scan() {
         if !is_arithop(&token) {
@@ -88,12 +69,14 @@ pub fn binexpr<T>(scanner: &Scanner<T>, ptp: Precedence) -> Result<Tree<AstNode>
             break;
         }
 
-        let node_type = arithop(scanner, token);
         let right = binexpr(scanner, curr_prec)?;
 
-        let (new_tree, right_root) = left.concat(right);
-        left = new_tree.new_root_with_right_idx(AstNode::make_leaf(node_type), right_root.unwrap());
-            // AstNode::new(arithop(scanner, token), Some(left), Some(right));
+        left = match token {
+            Token::Plus|Token::Minus|Token::Star|Token::Slash|Token::EQ|Token::NE|Token::LT|Token::LE|Token::GT|Token::GE => {
+                AstNode::make_binary(token, left, right)
+            }
+            _ => unreachable!("This shouldn't be reachable after we tested the op to be arithmetic")
+        };
     }
 
     Ok(left)
@@ -103,9 +86,7 @@ pub fn binexpr<T>(scanner: &Scanner<T>, ptp: Precedence) -> Result<Tree<AstNode>
 mod tests {
     use std::io::Cursor;
     use super::*;
-    use crate::ast::Ast;
     use crate::scan::Token;
-    use crate::tree::IndexableNode;
 
     fn scanner_from(s: &str) -> Scanner<Cursor<Vec<u8>>> {
         Scanner::new(Cursor::new(s.as_bytes().to_vec()))
@@ -117,18 +98,14 @@ mod tests {
     fn primary_intlit_returns_leaf_node() {
         let scanner = scanner_from("42");
         let node = primary(&scanner);
-        assert!(matches!(node.op, Ast::IntLit(42)));
-        assert!(node.get_left_index().is_none());
-        assert!(node.get_right_index().is_none());
+        assert_eq!(node, AstNode::IntLit(42));
     }
 
     #[test]
     fn primary_ident_returns_leaf_node() {
         let scanner = scanner_from("x");
         let node = primary(&scanner);
-        assert!(matches!(node.op, Ast::Ident(ref s) if s == "x"));
-        assert!(node.get_left_index().is_none());
-        assert!(node.get_right_index().is_none());
+        assert_eq!(node, AstNode::make_ident("x"));
     }
 
     #[test]
@@ -145,58 +122,20 @@ mod tests {
         primary(&scanner);
     }
 
-    // --- arithop ---
-
-    #[test]
-    fn arithop_plus_yields_add() {
-        let scanner = scanner_from("");
-        assert!(matches!(arithop(&scanner, Token::Plus), Ast::Add));
-    }
-
-    #[test]
-    fn arithop_minus_yields_subtract() {
-        let scanner = scanner_from("");
-        assert!(matches!(arithop(&scanner, Token::Minus), Ast::Subtract));
-    }
-
-    #[test]
-    fn arithop_star_yields_multiply() {
-        let scanner = scanner_from("");
-        assert!(matches!(arithop(&scanner, Token::Star), Ast::Multiply));
-    }
-
-    #[test]
-    fn arithop_slash_yields_divide() {
-        let scanner = scanner_from("");
-        assert!(matches!(arithop(&scanner, Token::Slash), Ast::Divide));
-    }
-
-    #[test]
-    #[should_panic]
-    fn arithop_panics_on_intlit_token() {
-        let scanner = scanner_from("");
-        arithop(&scanner, Token::IntLit(1));
-    }
-
     // --- binexpr ---
 
     #[test]
     fn binexpr_single_integer_returns_intlit_root() {
         let scanner = scanner_from("7");
         let tree = binexpr(&scanner, 0).expect("Expected a clean parsing");
-        assert!(matches!(tree.get_root().unwrap().op, Ast::IntLit(7)));
-        assert!(tree.get_root().unwrap().get_left_index().is_none());
+        assert_eq!(tree, AstNode::IntLit(7));
     }
 
     #[test]
     fn binexpr_addition_builds_correct_tree() {
         let scanner = scanner_from("3 + 5");
         let tree = binexpr(&scanner, 0).expect("Expected a clean parsing");
-        assert!(matches!(tree.get_root().unwrap().op, Ast::Add));
-        let left = tree.get_node(tree.get_root().unwrap().get_left_index().unwrap()).unwrap();
-        assert!(matches!(left.op, Ast::IntLit(3)));
-        let right = tree.get_node(tree.get_root().unwrap().get_right_index().unwrap()).unwrap();
-        assert!(matches!(right.op, Ast::IntLit(5)));
+        assert_eq!(tree, AstNode::make_binary(Token::Plus, AstNode::IntLit(3), AstNode::IntLit(5)));
     }
 
     #[test]
@@ -204,9 +143,10 @@ mod tests {
         // "2 - 3 + 5" parses as Add(Subtract(2, 3), 5): last op is root, left subtree holds earlier ops
         let scanner = scanner_from("2 - 3 + 5");
         let tree = binexpr(&scanner, 0).expect("Expected a clean parsing");
-        assert!(matches!(tree.get_root().unwrap().op, Ast::Add));
-        let left_idx = tree.get_root().unwrap().get_left_index().unwrap();
-        assert!(matches!(tree.get_node(left_idx).unwrap().op, Ast::Subtract));
+        assert_eq!(tree,
+            AstNode::make_binary(Token::Plus,
+                AstNode::make_binary(Token::Minus, AstNode::IntLit(2), AstNode::IntLit(3)),
+                AstNode::IntLit(5)));
     }
 
     // --- op_precedence ---
@@ -250,29 +190,13 @@ mod tests {
         assert!(!is_arithop(&Token::Ident("x".into())));
     }
 
-    // --- arithop comparison variants ---
-
-    #[test]
-    fn arithop_comparison_operators() {
-        let s = scanner_from("");
-        assert!(matches!(arithop(&s, Token::EQ), Ast::Equal));
-        assert!(matches!(arithop(&s, Token::NE), Ast::NotEqual));
-        assert!(matches!(arithop(&s, Token::LT), Ast::LessThan));
-        assert!(matches!(arithop(&s, Token::LE), Ast::LessThanOrEqual));
-        assert!(matches!(arithop(&s, Token::GT), Ast::GreaterThan));
-        assert!(matches!(arithop(&s, Token::GE), Ast::GreaterThanOrEqual));
-    }
-
     // --- binexpr with comparisons ---
 
     #[test]
     fn binexpr_equality_comparison_builds_equal_root() {
         let scanner = scanner_from("3 == 5");
         let tree = binexpr(&scanner, 0).expect("Expected a clean parsing");
-        assert!(matches!(tree.get_root().unwrap().op, Ast::Equal));
-        let left = tree.get_node(tree.get_root().unwrap().get_left_index().unwrap()).unwrap();
-        assert!(matches!(left.op, Ast::IntLit(3)));
-        let right = tree.get_node(tree.get_root().unwrap().get_right_index().unwrap()).unwrap();
-        assert!(matches!(right.op, Ast::IntLit(5)));
+
+        assert_eq!(tree, AstNode::make_binary(Token::EQ, AstNode::IntLit(3), AstNode::IntLit(5)));
     }
 }

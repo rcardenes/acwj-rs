@@ -2,11 +2,10 @@ use std::{
     collections::HashMap,
     fmt,
     io::Write,
-    sync::LazyLock,
 };
 use anyhow::Result;
 use crate::{
-    ast::Ast,
+    ast::AstNode,
     cgen::CodeBackend
 };
 
@@ -92,39 +91,27 @@ impl fmt::Display for X86_64Reg8b {
     }
 }
 
-static CMP_TO_JMP_INSTRUCTIONS: LazyLock<HashMap<Ast, &'static str>> = LazyLock::new(|| {
-    HashMap::from([
-        (Ast::Equal, "jne"),
-        (Ast::NotEqual, "je"),
-        (Ast::LessThan, "jge"),
-        (Ast::LessThanOrEqual, "jg"),
-        (Ast::GreaterThan, "jle"),
-        (Ast::GreaterThanOrEqual, "jl"),
-    ])
-});
-
-static CMP_TO_SET_INSTRUCTIONS: LazyLock<HashMap<Ast, &'static str>> = LazyLock::new(|| {
-    HashMap::from([
-        (Ast::Equal, "sete"),
-        (Ast::NotEqual, "setne"),
-        (Ast::LessThan, "setl"),
-        (Ast::LessThanOrEqual, "setle"),
-        (Ast::GreaterThan, "setg"),
-        (Ast::GreaterThanOrEqual, "setge"),
-    ])
-});
-
-fn ast_to_jmp_op(op: &Ast) -> &'static str {
-    match CMP_TO_JMP_INSTRUCTIONS.get(op) {
-        Some(instr) => instr,
-        None => panic!("Not a comparison operator: {:?}", op)
+fn ast_to_jmp_op(op: &AstNode) -> &'static str {
+    match op {
+        AstNode::Equal {..} => "jne",
+        AstNode::NotEqual {..} => "je",
+        AstNode::LessThan {..} => "jge",
+        AstNode::LessThanOrEqual {..} => "jg",
+        AstNode::GreaterThan {..} => "jle",
+        AstNode::GreaterThanOrEqual {..} => "jl",
+        _ => panic!("Not a comparison operator: {:?}", op)
     }
 }
 
-fn ast_to_set_op(op: &Ast) -> &'static str {
-    match CMP_TO_SET_INSTRUCTIONS.get(op) {
-        Some(instr) => instr,
-        None => panic!("Not a comparison operator: {:?}", op)
+fn ast_to_set_op(op: &AstNode) -> &'static str {
+    match op {
+        AstNode::Equal {..} => "sete",
+        AstNode::NotEqual {..} => "setne",
+        AstNode::LessThan {..} => "setl",
+        AstNode::LessThanOrEqual {..} => "setle",
+        AstNode::GreaterThan {..} => "setg",
+        AstNode::GreaterThanOrEqual {..} => "setge",
+        _ => panic!("Not a comparison operator: {:?}", op)
     }
 }
 
@@ -272,7 +259,7 @@ impl<T> CodeBackend for X864_64Backend<T>
         Ok(())
     }
 
-    fn compare_and_set(&mut self, op: &Ast, r1: Self::Reg, r2: Self::Reg) -> Result<Option<Self::Reg>> {
+    fn compare_and_set(&mut self, op: &AstNode, r1: Self::Reg, r2: Self::Reg) -> Result<Option<Self::Reg>> {
         let r2_8b = r2.as_8b();
 
         writeln!(self.output, "\tcmpq\t{}, {}", r2, r1)?;
@@ -283,7 +270,7 @@ impl<T> CodeBackend for X864_64Backend<T>
         Ok(Some(r2))
     }
 
-    fn compare_and_jump(&mut self, op: &Ast, r1: Self::Reg, r2: Self::Reg, label_num: usize) -> Result<Option<Self::Reg>> {
+    fn compare_and_jump(&mut self, op: &AstNode, r1: Self::Reg, r2: Self::Reg, label_num: usize) -> Result<Option<Self::Reg>> {
         writeln!(self.output, "\tcmpq\t{}, {}", r2, r1)?;
         writeln!(self.output, "\t{}\tL{}", ast_to_jmp_op(op), label_num)?;
         self.free_all_registers()?;

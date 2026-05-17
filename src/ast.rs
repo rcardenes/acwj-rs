@@ -1,375 +1,409 @@
-use crate::tree::IndexableNode;
+use crate::scan::Token;
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
-pub enum Ast {
-    // Operators
-    Add,
-    Subtract,
-    Multiply,
-    Divide,
-    Equal,
-    NotEqual,
-    LessThan,
-    LessThanOrEqual,
-    GreaterThan,
-    GreaterThanOrEqual,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Identifier {
+    pub name: String,
+}
+
+impl Identifier {
+    pub fn new(name: &str) -> Self {
+        Identifier {
+            name: name.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AstNode {
     // Literals and identifiers
     IntLit(i64),
-    Ident(String),
-    LvIdent(String),
+    Ident(Identifier),
+    LvIdent(Identifier),
+
+    // Binary operations
+    //   -- arithmetic
+    Add { left: Box<AstNode>, right: Box<AstNode> },
+    Subtract { left: Box<AstNode>, right: Box<AstNode> },
+    Multiply { left: Box<AstNode>, right: Box<AstNode> },
+    Divide { left: Box<AstNode>, right: Box<AstNode> },
+    //   -- comparison
+    Equal { left: Box<AstNode>, right: Box<AstNode> },
+    NotEqual { left: Box<AstNode>, right: Box<AstNode> },
+    LessThan { left: Box<AstNode>, right: Box<AstNode> },
+    GreaterThan { left: Box<AstNode>, right: Box<AstNode> },
+    LessThanOrEqual { left: Box<AstNode>, right: Box<AstNode> },
+    GreaterThanOrEqual { left: Box<AstNode>, right: Box<AstNode> },
+
     // Declarations
-    Function(String),
+    Function { name: Box<AstNode>, body: Box<AstNode> },
+    GlobalDec { id: Identifier },
+
     // Statements
-    GlobalDec(String),
-    Assign,
-    Glue,
-    If,
-    While,
-    Print,
-}
-
-impl Ast {
-    pub fn is_arith(&self) -> bool {
-        matches!(self, Ast::Add|Ast::Subtract|Ast::Divide|Ast::Multiply)
-    }
-
-    pub fn is_comparison(&self) -> bool {
-        matches!(self, Ast::Equal|Ast::NotEqual
-                |Ast::LessThan|Ast::LessThanOrEqual
-                |Ast::GreaterThan|Ast::GreaterThanOrEqual)
-    }
-
-    pub fn is_loop_with_comparison(&self) -> bool {
-        matches!(self, Ast::If|Ast::While)
-    }
-}
-
-pub struct AstNodeBuilder {
-    op: Ast,
-    left_index: Option<usize>,
-    mid_index: Option<usize>,
-    right_index: Option<usize>,
-}
-
-impl AstNodeBuilder {
-    pub fn new(op: Ast) -> Self {
-        Self { op, left_index: None, mid_index: None, right_index: None, }
-    }
-
-    pub fn left(mut self, idx: usize) -> Self {
-        self.left_index = Some(idx);
-        self
-    }
-
-    pub fn mid(mut self, idx: usize) -> Self {
-        self.mid_index = Some(idx);
-        self
-    }
-
-    pub fn right(mut self, idx: usize) -> Self {
-        self.right_index = Some(idx);
-        self
-    }
-
-    pub fn build(self) -> AstNode {
-        AstNode::new(self.op, self.left_index, self.mid_index, self.right_index)
-    }
-}
-
-#[derive(Debug)]
-pub struct AstNode {
-    pub op: Ast,
-    left_index: Option<usize>,
-    mid_index: Option<usize>,
-    right_index: Option<usize>,
+    Empty, // Empty statement, meant to ensure that we can describe empty compound statements
+    Assign { id: Box<AstNode>, expr: Box<AstNode> },
+    Glue { left: Box<AstNode>, right: Box<AstNode> },
+    If { cond: Box<AstNode>, branch_t: Box<AstNode>, branch_f: Option<Box<AstNode>> },
+    While { cond: Box<AstNode>, body: Box<AstNode> },
+    Print { expr: Box<AstNode> },
 }
 
 impl AstNode {
-    pub fn new(op: Ast, left_index: Option<usize>, mid_index: Option<usize>, right_index: Option<usize>) -> Self {
-        AstNode {
-            op,
-            left_index,
-            mid_index,
-            right_index,
+    pub fn is_arith(&self) -> bool {
+        matches!(self, AstNode::Add {..}
+                     | AstNode::Subtract {..}
+                     | AstNode::Multiply {..}
+                     | AstNode::Divide {..})
+    }
+
+    pub fn is_comparison(&self) -> bool {
+        matches!(self, AstNode::Equal {..}
+                     | AstNode::NotEqual {..}
+                     | AstNode::LessThan {..}
+                     | AstNode::GreaterThan {..}
+                     | AstNode::LessThanOrEqual {..}
+                     | AstNode::GreaterThanOrEqual {..})
+    }
+
+    pub fn is_branching_stmt(&self) -> bool {
+        matches!(self, AstNode::While {..}
+                     | AstNode::If {..})
+    }
+
+    pub fn make_binary(op: Token, l: AstNode, r: AstNode) -> AstNode {
+        match op {
+            Token::Plus => AstNode::Add {
+                left: Box::new(l),
+                right: Box::new(r),
+            },
+            Token::Minus => AstNode::Subtract {
+                left: Box::new(l),
+                right: Box::new(r),
+            },
+            Token::Star => AstNode::Multiply {
+                left: Box::new(l),
+                right: Box::new(r),
+            },
+            Token::Slash => AstNode::Divide {
+                left: Box::new(l),
+                right: Box::new(r),
+            },
+            Token::EQ => AstNode::Equal {
+                left: Box::new(l),
+                right: Box::new(r),
+            },
+            Token::NE => AstNode::NotEqual {
+                left: Box::new(l),
+                right: Box::new(r),
+            },
+            Token::LT => AstNode::LessThan {
+                left: Box::new(l),
+                right: Box::new(r),
+            },
+            Token::GT => AstNode::GreaterThan {
+                left: Box::new(l),
+                right: Box::new(r),
+            },
+            Token::LE => AstNode::LessThanOrEqual {
+                left: Box::new(l),
+                right: Box::new(r),
+            },
+            Token::GE => AstNode::GreaterThanOrEqual {
+                left: Box::new(l),
+                right: Box::new(r),
+            },
+            _ => panic!("Wrong token: {op:?}")
         }
     }
 
-    pub fn make_leaf(op: Ast) -> Self {
-        AstNode::new(op, None, None, None)
+    pub fn make_ident(name: &str) -> AstNode {
+        AstNode::Ident(Identifier::new(name))
     }
 
-    pub fn make_unary(op: Ast, left_index: usize) -> Self {
-        AstNode::new(op, Some(left_index), None, None)
-    }
-}
-
-impl IndexableNode for AstNode {
-    fn is_leaf(&self) -> bool {
-        self.left_index.is_none() && self.right_index.is_none()
+    pub fn make_lvident(name: &str) -> AstNode {
+        AstNode::LvIdent(Identifier::new(name))
     }
 
-    fn get_left_index(&self) -> Option<usize> {
-        self.left_index
-    }
+    pub fn make_function(name: AstNode, body: AstNode) -> AstNode {
+        if !matches!(name, AstNode::Ident(_)) {
+            panic!("Trying to make an assignment node without an ident as name")
+        }
 
-    fn get_mid_index(&self) -> Option<usize> {
-        self.mid_index
-    }
-
-    fn get_right_index(&self) -> Option<usize> {
-        self.right_index
-    }
-
-    fn set_leaves(&mut self, left: Option<usize>, mid: Option<usize>, right: Option<usize>) {
-        self.left_index = left;
-        self.mid_index = mid;
-        self.right_index = right;
-    }
-
-    fn shift_by(self, offset: usize) -> AstNode {
-        AstNode {
-            op: self.op,
-            left_index: self.left_index.map(|v| v + offset),
-            mid_index: self.mid_index.map(|v| v + offset),
-            right_index: self.right_index.map(|v| v + offset),
+        AstNode::Function {
+            name: Box::new(name),
+            body: Box::new(body),
         }
     }
 
-    fn make_glue() -> AstNode {
-        AstNode::make_leaf(Ast::Glue)
+    pub fn make_global_declaration(name: &str) -> AstNode {
+        AstNode::GlobalDec { id: Identifier::new(name) }
+    }
+
+    pub fn make_assign(id: AstNode, expr: AstNode) -> AstNode {
+        if !matches!(id, AstNode::LvIdent(_)) {
+            panic!("Trying to make an assignment node without an lvident on the left")
+        }
+        AstNode::Assign {
+            id: Box::new(id),
+            expr: Box::new(expr),
+        }
+    }
+
+    pub fn make_if(cond: AstNode, branch_t: AstNode, branch_f: Option<AstNode>) -> AstNode {
+        AstNode::If {
+            cond: Box::new(cond),
+            branch_t: Box::new(branch_t),
+            branch_f: branch_f.map(Box::new),
+        }
+    }
+
+    pub fn make_while(cond: AstNode, body: AstNode) -> AstNode {
+        AstNode::While {
+            cond: Box::new(cond),
+            body: Box::new(body),
+        }
+    }
+
+    pub fn make_print(expr: AstNode) -> AstNode {
+        AstNode::Print {
+            expr: Box::new(expr),
+        }
+    }
+
+    pub fn make_glue(left: AstNode, right: AstNode) -> AstNode {
+        AstNode::Glue {
+            left: Box::new(left),
+            right: Box::new(right),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tree::Tree;
 
-    // --- AstNode construction ---
-
-    #[test]
-    fn astnode_new_leaf_stores_op_and_no_indices() {
-        let node = AstNode::new(Ast::IntLit(42), None, None, None);
-        assert!(matches!(node.op, Ast::IntLit(42)));
-        assert!(node.left_index.is_none());
-        assert!(node.mid_index.is_none());
-        assert!(node.right_index.is_none());
-    }
-
-    #[test]
-    fn astnode_new_binary_stores_op_and_all_indices() {
-        let node = AstNode::new(Ast::Add, Some(0), Some(1), Some(2));
-        assert!(matches!(node.op, Ast::Add));
-        assert_eq!(node.left_index, Some(0));
-        assert_eq!(node.mid_index, Some(1));
-        assert_eq!(node.right_index, Some(2));
-    }
-
-    // --- IndexableNode trait impl ---
-
-    #[test]
-    fn indexable_node_leaf_returns_none() {
-        let node = AstNode::new(Ast::IntLit(1), None, None, None);
-        assert!(node.get_left_index().is_none());
-        assert!(node.get_mid_index().is_none());
-        assert!(node.get_right_index().is_none());
-    }
-
-    #[test]
-    fn indexable_node_binary_returns_indices() {
-        let node = AstNode::new(Ast::Multiply, Some(3), None, Some(7));
-        assert_eq!(node.get_left_index(), Some(3));
-        assert_eq!(node.get_mid_index(), None);
-        assert_eq!(node.get_right_index(), Some(7));
-    }
-
-    // --- Ast debug representation ---
-
-    #[test]
-    fn ast_debug_intlit_contains_value() {
-        let s = format!("{:?}", Ast::IntLit(99));
-        assert!(s.contains("IntLit") && s.contains("99"));
-    }
-
-    #[test]
-    fn ast_debug_operators() {
-        assert!(format!("{:?}", Ast::Add).contains("Add"));
-        assert!(format!("{:?}", Ast::Subtract).contains("Subtract"));
-        assert!(format!("{:?}", Ast::Multiply).contains("Multiply"));
-        assert!(format!("{:?}", Ast::Divide).contains("Divide"));
-    }
-
-    // --- Integration: building AST trees ---
-
-    #[test]
-    fn tree_simple_addition() {
-        // 3 + 5
-        let mut tree = Tree::new(AstNode::make_leaf(Ast::IntLit(3))); // idx 0
-        let r = tree.append(AstNode::make_leaf(Ast::IntLit(5)), false); // idx 1
-        tree.append(AstNode::new(Ast::Add, Some(0), None, Some(r)), true);          // idx 2, new root
-
-        assert!(matches!(tree.get_root().unwrap().op, Ast::Add));
-        assert_eq!(tree.get_root().unwrap().get_left_index(), Some(0));
-        assert_eq!(tree.get_root().unwrap().get_right_index(), Some(r));
-        assert!(matches!(tree.get_node(0).unwrap().op, Ast::IntLit(3)));
-        assert!(matches!(tree.get_node(r).unwrap().op, Ast::IntLit(5)));
-    }
-
-    #[test]
-    fn tree_nested_expression() {
-        // (2 * 3) + 4
-        let mut tree = Tree::new(AstNode::make_leaf(Ast::IntLit(2))); // idx 0
-        let idx3 = tree.append(AstNode::make_leaf(Ast::IntLit(3)), false); // idx 1
-        let mul  = tree.append(AstNode::new(Ast::Multiply, Some(0), None, Some(idx3)), false); // idx 2
-        let idx4 = tree.append(AstNode::make_leaf(Ast::IntLit(4)),false); // idx 3
-        tree.append(AstNode::new(Ast::Add, Some(mul), None, Some(idx4)), true);          // idx 4, new root
-
-        assert!(matches!(tree.get_root().unwrap().op, Ast::Add));
-        let left_idx = tree.get_root().unwrap().get_left_index().unwrap();
-        assert!(matches!(tree.get_node(left_idx).unwrap().op, Ast::Multiply));
-        let right_idx = tree.get_root().unwrap().get_right_index().unwrap();
-        assert!(matches!(tree.get_node(right_idx).unwrap().op, Ast::IntLit(4)));
-    }
-
-    #[test]
-    fn tree_get_node_out_of_bounds_returns_none() {
-        let tree = Tree::new(AstNode::make_leaf(Ast::IntLit(1)));
-        assert!(tree.get_node(999).is_none());
-    }
-
-    // --- AstNode factory helpers ---
-
-    #[test]
-    fn make_leaf_creates_node_with_no_indices() {
-        let node = AstNode::make_leaf(Ast::IntLit(5));
-        assert!(matches!(node.op, Ast::IntLit(5)));
-        assert!(node.left_index.is_none());
-        assert!(node.right_index.is_none());
-    }
-
-    #[test]
-    fn make_unary_sets_left_index_only() {
-        let node = AstNode::make_unary(Ast::Add, 3);
-        assert!(matches!(node.op, Ast::Add));
-        assert_eq!(node.left_index, Some(3));
-        assert!(node.right_index.is_none());
-    }
-
-    // --- IndexableNode: shift_by and set_leaves ---
-
-    #[test]
-    fn shift_by_adjusts_both_indices_by_offset() {
-        let node = AstNode::new(Ast::Add, Some(1), None, Some(2));
-        let shifted = node.shift_by(10);
-        assert_eq!(shifted.left_index, Some(11));
-        assert_eq!(shifted.right_index, Some(12));
-    }
-
-    #[test]
-    fn shift_by_leaf_leaves_none_indices_unchanged() {
-        let node = AstNode::make_leaf(Ast::IntLit(42));
-        let shifted = node.shift_by(5);
-        assert!(shifted.left_index.is_none());
-        assert!(shifted.right_index.is_none());
-    }
-
-    #[test]
-    fn set_leaves_overwrites_both_indices() {
-        let mut node = AstNode::make_leaf(Ast::Add);
-        node.set_leaves(Some(7), None, Some(9));
-        assert_eq!(node.left_index, Some(7));
-        assert_eq!(node.mid_index, None);
-        assert_eq!(node.right_index, Some(9));
-    }
-
-    #[test]
-    fn set_leaves_can_clear_indices_to_none() {
-        let mut node = AstNode::new(Ast::Add, Some(1), Some(2), Some(3));
-        node.set_leaves(None, None, None);
-        assert!(node.left_index.is_none());
-        assert!(node.mid_index.is_none());
-        assert!(node.right_index.is_none());
-    }
 
     // --- Ast predicate methods ---
 
     #[test]
     fn is_arith_true_for_arithmetic_ops() {
-        assert!(Ast::Add.is_arith());
-        assert!(Ast::Subtract.is_arith());
-        assert!(Ast::Multiply.is_arith());
-        assert!(Ast::Divide.is_arith());
+        assert!(AstNode::make_binary(Token::Plus, AstNode::IntLit(5), AstNode::IntLit(2)).is_arith());
+        assert!(AstNode::make_binary(Token::Minus, AstNode::IntLit(5), AstNode::IntLit(2)).is_arith());
+        assert!(AstNode::make_binary(Token::Star, AstNode::IntLit(5), AstNode::IntLit(2)).is_arith());
+        assert!(AstNode::make_binary(Token::Slash, AstNode::IntLit(5), AstNode::IntLit(2)).is_arith());
     }
 
     #[test]
     fn is_arith_false_for_non_arithmetic() {
-        assert!(!Ast::Equal.is_arith());
-        assert!(!Ast::If.is_arith());
-        assert!(!Ast::IntLit(1).is_arith());
-        assert!(!Ast::While.is_arith());
+        assert!(!AstNode::make_binary(Token::EQ, AstNode::IntLit(5), AstNode::IntLit(5)).is_arith());
+        assert!(!AstNode::make_if(AstNode::Empty, AstNode::Empty, None).is_arith());
+        assert!(!AstNode::IntLit(1).is_arith());
+        assert!(!AstNode::make_while(AstNode::Empty, AstNode::Empty).is_arith());
     }
 
     #[test]
     fn is_comparison_true_for_comparisons() {
-        assert!(Ast::Equal.is_comparison());
-        assert!(Ast::NotEqual.is_comparison());
-        assert!(Ast::LessThan.is_comparison());
-        assert!(Ast::LessThanOrEqual.is_comparison());
-        assert!(Ast::GreaterThan.is_comparison());
-        assert!(Ast::GreaterThanOrEqual.is_comparison());
+        assert!(AstNode::make_binary(Token::EQ, AstNode::IntLit(5), AstNode::IntLit(5)).is_comparison());
+        assert!(AstNode::make_binary(Token::NE, AstNode::IntLit(5), AstNode::IntLit(5)).is_comparison());
+        assert!(AstNode::make_binary(Token::LT, AstNode::IntLit(5), AstNode::IntLit(5)).is_comparison());
+        assert!(AstNode::make_binary(Token::GT, AstNode::IntLit(5), AstNode::IntLit(5)).is_comparison());
+        assert!(AstNode::make_binary(Token::LE, AstNode::IntLit(5), AstNode::IntLit(5)).is_comparison());
+        assert!(AstNode::make_binary(Token::GE, AstNode::IntLit(5), AstNode::IntLit(5)).is_comparison());
     }
 
     #[test]
     fn is_comparison_false_for_non_comparisons() {
-        assert!(!Ast::Add.is_comparison());
-        assert!(!Ast::While.is_comparison());
-        assert!(!Ast::IntLit(0).is_comparison());
+        assert!(!AstNode::make_binary(Token::Plus, AstNode::IntLit(5), AstNode::IntLit(5)).is_comparison());
+        assert!(!AstNode::make_while(AstNode::Empty, AstNode::Empty).is_comparison());
+        assert!(!AstNode::IntLit(0).is_comparison());
     }
 
     #[test]
-    fn is_loop_with_comparison_true_for_if_and_while() {
-        assert!(Ast::If.is_loop_with_comparison());
-        assert!(Ast::While.is_loop_with_comparison());
+    fn is_branching_stmt_true_for_if_and_while() {
+        assert!(AstNode::make_if(AstNode::Empty, AstNode::Empty, None).is_branching_stmt());
+        assert!(AstNode::make_while(AstNode::Empty, AstNode::Empty).is_branching_stmt());
     }
 
     #[test]
-    fn is_loop_with_comparison_false_for_others() {
-        assert!(!Ast::Add.is_loop_with_comparison());
-        assert!(!Ast::Equal.is_loop_with_comparison());
-        assert!(!Ast::IntLit(5).is_loop_with_comparison());
+    fn is_branching_stmt_false_for_others() {
+        assert!(!AstNode::make_binary(Token::Plus, AstNode::IntLit(5), AstNode::IntLit(5)).is_branching_stmt());
+        assert!(!AstNode::make_binary(Token::EQ, AstNode::IntLit(5), AstNode::IntLit(5)).is_branching_stmt());
+        assert!(!AstNode::IntLit(5).is_branching_stmt());
     }
 
-    // --- AstNodeBuilder ---
+    // --- Identifier construction ---
 
     #[test]
-    fn astnode_builder_builds_node_with_all_indices() {
-        let node = AstNodeBuilder::new(Ast::If)
-            .left(1)
-            .mid(2)
-            .right(3)
-            .build();
-        assert!(matches!(node.op, Ast::If));
-        assert_eq!(node.left_index, Some(1));
-        assert_eq!(node.mid_index, Some(2));
-        assert_eq!(node.right_index, Some(3));
+    fn identifier_new_stores_name() {
+        let id = Identifier::new("foo");
+        assert_eq!(id.name, "foo");
+    }
+
+    // --- Factory methods: literals and identifiers ---
+
+    #[test]
+    fn make_ident_creates_ident_variant() {
+        let node = AstNode::make_ident("x");
+        assert!(matches!(node, AstNode::Ident(Identifier { name }) if name == "x"));
     }
 
     #[test]
-    fn astnode_builder_defaults_to_no_indices() {
-        let node = AstNodeBuilder::new(Ast::Add).build();
-        assert!(node.left_index.is_none());
-        assert!(node.mid_index.is_none());
-        assert!(node.right_index.is_none());
+    fn make_lvident_creates_lvident_variant() {
+        let node = AstNode::make_lvident("y");
+        assert!(matches!(node, AstNode::LvIdent(Identifier { name }) if name == "y"));
     }
 
-    // --- IndexableNode::make_glue ---
+    // --- make_binary: all token mappings ---
 
     #[test]
-    fn make_glue_creates_glue_leaf_with_no_indices() {
-        let node = AstNode::make_glue();
-        assert!(matches!(node.op, Ast::Glue));
-        assert!(node.get_left_index().is_none());
-        assert!(node.get_mid_index().is_none());
-        assert!(node.get_right_index().is_none());
+    fn make_binary_plus_creates_add() {
+        let node = AstNode::make_binary(Token::Plus, AstNode::IntLit(1), AstNode::IntLit(2));
+        assert!(matches!(node, AstNode::Add { left, right }
+            if *left == AstNode::IntLit(1) && *right == AstNode::IntLit(2)));
+    }
+
+    #[test]
+    fn make_binary_minus_creates_subtract() {
+        let node = AstNode::make_binary(Token::Minus, AstNode::IntLit(1), AstNode::IntLit(2));
+        assert!(matches!(node, AstNode::Subtract { left, right }
+            if *left == AstNode::IntLit(1) && *right == AstNode::IntLit(2)));
+    }
+
+    #[test]
+    fn make_binary_star_creates_multiply() {
+        let node = AstNode::make_binary(Token::Star, AstNode::IntLit(1), AstNode::IntLit(2));
+        assert!(matches!(node, AstNode::Multiply { left, right }
+            if *left == AstNode::IntLit(1) && *right == AstNode::IntLit(2)));
+    }
+
+    #[test]
+    fn make_binary_slash_creates_divide() {
+        let node = AstNode::make_binary(Token::Slash, AstNode::IntLit(8), AstNode::IntLit(2));
+        assert!(matches!(node, AstNode::Divide { left, right }
+            if *left == AstNode::IntLit(8) && *right == AstNode::IntLit(2)));
+    }
+
+    #[test]
+    fn make_binary_eq_creates_equal() {
+        let node = AstNode::make_binary(Token::EQ, AstNode::IntLit(1), AstNode::IntLit(2));
+        assert!(matches!(node, AstNode::Equal { .. }));
+    }
+
+    #[test]
+    fn make_binary_ne_creates_notequal() {
+        let node = AstNode::make_binary(Token::NE, AstNode::IntLit(1), AstNode::IntLit(2));
+        assert!(matches!(node, AstNode::NotEqual { .. }));
+    }
+
+    #[test]
+    fn make_binary_lt_creates_lessthan() {
+        let node = AstNode::make_binary(Token::LT, AstNode::IntLit(1), AstNode::IntLit(2));
+        assert!(matches!(node, AstNode::LessThan { .. }));
+    }
+
+    #[test]
+    fn make_binary_gt_creates_greaterthan() {
+        let node = AstNode::make_binary(Token::GT, AstNode::IntLit(1), AstNode::IntLit(2));
+        assert!(matches!(node, AstNode::GreaterThan { .. }));
+    }
+
+    #[test]
+    fn make_binary_le_creates_lessorequal() {
+        let node = AstNode::make_binary(Token::LE, AstNode::IntLit(1), AstNode::IntLit(2));
+        assert!(matches!(node, AstNode::LessThanOrEqual { .. }));
+    }
+
+    #[test]
+    fn make_binary_ge_creates_greaterorequal() {
+        let node = AstNode::make_binary(Token::GE, AstNode::IntLit(1), AstNode::IntLit(2));
+        assert!(matches!(node, AstNode::GreaterThanOrEqual { .. }));
+    }
+
+    #[test]
+    #[should_panic(expected = "Wrong token")]
+    fn make_binary_unknown_token_panics() {
+        AstNode::make_binary(Token::Semi, AstNode::IntLit(0), AstNode::IntLit(0));
+    }
+
+    // --- Factory methods: declarations ---
+
+    #[test]
+    fn make_global_declaration_creates_globaldec() {
+        let node = AstNode::make_global_declaration("g");
+        assert!(matches!(&node, AstNode::GlobalDec { id } if id.name == "g"));
+    }
+
+    #[test]
+    fn make_function_creates_function_node() {
+        let name = AstNode::make_ident("main");
+        let body = AstNode::make_glue(AstNode::Empty, AstNode::Empty);
+        let node = AstNode::make_function(name, body);
+        assert!(matches!(&node, AstNode::Function { .. }));
+    }
+
+    #[test]
+    #[should_panic(expected = "without an ident")]
+    fn make_function_with_non_ident_panics() {
+        AstNode::make_function(AstNode::IntLit(42), AstNode::Empty);
+    }
+
+    // --- Factory methods: statements ---
+
+    #[test]
+    fn make_assign_creates_assign_node() {
+        let id = AstNode::make_lvident("x");
+        let expr = AstNode::IntLit(10);
+        let node = AstNode::make_assign(id, expr);
+        assert!(matches!(&node, AstNode::Assign { .. }));
+    }
+
+    #[test]
+    #[should_panic(expected = "without an lvident")]
+    fn make_assign_with_non_lvident_panics() {
+        AstNode::make_assign(AstNode::make_ident("x"), AstNode::IntLit(1));
+    }
+
+    #[test]
+    fn make_if_without_else_branch() {
+        let node = AstNode::make_if(AstNode::IntLit(1), AstNode::Empty, None);
+        assert!(matches!(&node, AstNode::If { branch_f: None, .. }));
+    }
+
+    #[test]
+    fn make_if_with_else_branch() {
+        let node = AstNode::make_if(AstNode::IntLit(1), AstNode::Empty, Some(AstNode::Empty));
+        assert!(matches!(&node, AstNode::If { branch_f: Some(..), .. }));
+    }
+
+    #[test]
+    fn make_while_creates_while_node() {
+        let node = AstNode::make_while(AstNode::IntLit(1), AstNode::Empty);
+        assert!(matches!(&node, AstNode::While { .. }));
+    }
+
+    #[test]
+    fn make_print_creates_print_node() {
+        let node = AstNode::make_print(AstNode::IntLit(42));
+        assert!(matches!(&node, AstNode::Print { .. }));
+    }
+
+    #[test]
+    fn make_glue_creates_glue_node() {
+        let node = AstNode::make_glue(AstNode::IntLit(1), AstNode::IntLit(2));
+        assert!(matches!(node, AstNode::Glue { left, right }
+            if left == Box::new(AstNode::IntLit(1)) && right == Box::new(AstNode::IntLit(2))));
+    }
+
+    // --- Structural ---
+
+    #[test]
+    fn ast_node_debug_contains_variant_name() {
+        let s = format!("{:?}", AstNode::IntLit(7));
+        assert!(s.contains("IntLit"));
+    }
+
+    #[test]
+    fn ast_node_partial_eq() {
+        assert_eq!(AstNode::IntLit(3), AstNode::IntLit(3));
+        assert_ne!(AstNode::IntLit(3), AstNode::IntLit(4));
     }
 }
