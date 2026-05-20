@@ -1,6 +1,6 @@
 use crate::{
     scan::Token,
-    sym::DataType,
+    sym::PrimType,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -19,27 +19,27 @@ impl Identifier {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AstNode {
     // Literals and identifiers
-    IntLit { val: i64, dtype: DataType },
-    Ident { id: Identifier, dtype: DataType },
-    LvIdent { id: Identifier, dtype: DataType },
+    IntLit { val: i64, dtype: PrimType },
+    Ident { id: Identifier, dtype: PrimType },
+    LvIdent { id: Identifier, dtype: PrimType },
 
     // Binary operations
     //   -- arithmetic
-    Add { left: Box<AstNode>, right: Box<AstNode>, dtype: DataType },
-    Subtract { left: Box<AstNode>, right: Box<AstNode>, dtype: DataType },
-    Multiply { left: Box<AstNode>, right: Box<AstNode>, dtype: DataType },
-    Divide { left: Box<AstNode>, right: Box<AstNode>, dtype: DataType },
+    Add { left: Box<AstNode>, right: Box<AstNode>, dtype: PrimType },
+    Subtract { left: Box<AstNode>, right: Box<AstNode>, dtype: PrimType },
+    Multiply { left: Box<AstNode>, right: Box<AstNode>, dtype: PrimType },
+    Divide { left: Box<AstNode>, right: Box<AstNode>, dtype: PrimType },
     //   -- comparison
-    Equal { left: Box<AstNode>, right: Box<AstNode>, dtype: DataType },
-    NotEqual { left: Box<AstNode>, right: Box<AstNode>, dtype: DataType },
-    LessThan { left: Box<AstNode>, right: Box<AstNode>, dtype: DataType },
-    GreaterThan { left: Box<AstNode>, right: Box<AstNode>, dtype: DataType },
-    LessThanOrEqual { left: Box<AstNode>, right: Box<AstNode>, dtype: DataType },
-    GreaterThanOrEqual { left: Box<AstNode>, right: Box<AstNode>, dtype: DataType },
+    Equal { left: Box<AstNode>, right: Box<AstNode>, dtype: PrimType },
+    NotEqual { left: Box<AstNode>, right: Box<AstNode>, dtype: PrimType },
+    LessThan { left: Box<AstNode>, right: Box<AstNode>, dtype: PrimType },
+    GreaterThan { left: Box<AstNode>, right: Box<AstNode>, dtype: PrimType },
+    LessThanOrEqual { left: Box<AstNode>, right: Box<AstNode>, dtype: PrimType },
+    GreaterThanOrEqual { left: Box<AstNode>, right: Box<AstNode>, dtype: PrimType },
 
     // Declarations
     Function { name: Box<AstNode>, body: Box<AstNode> },
-    GlobalDec { id: Identifier, dtype: DataType },
+    GlobalDec { id: Identifier, dtype: PrimType },
 
     // Statements
     Empty, // Empty statement, meant to ensure that we can describe empty compound statements
@@ -72,7 +72,7 @@ impl AstNode {
                      | AstNode::If {..})
     }
 
-    pub fn get_type(&self) -> Option<DataType> {
+    pub fn get_type(&self) -> Option<PrimType> {
         match self {
             AstNode::IntLit { dtype, .. }
                 | AstNode::Ident { dtype, .. }
@@ -92,7 +92,7 @@ impl AstNode {
         }
     }
 
-    pub fn new_type(self, dtype: DataType) -> Self {
+    pub fn new_type(self, dtype: PrimType) -> Self {
         match self {
             AstNode::IntLit { val, .. } => AstNode::IntLit { val, dtype },
             AstNode::Ident { id, .. } => AstNode::Ident { id, dtype },
@@ -110,7 +110,7 @@ impl AstNode {
         }
     }
 
-    pub fn make_binary(op: Token, l: AstNode, r: AstNode, dtype: DataType) -> AstNode {
+    pub fn make_binary(op: Token, l: AstNode, r: AstNode, dtype: PrimType) -> AstNode {
         match op {
             Token::Plus => AstNode::Add {
                 left: Box::new(l),
@@ -166,15 +166,15 @@ impl AstNode {
         }
     }
 
-    pub fn make_intlit(val: i64, dtype: DataType) -> AstNode {
+    pub fn make_intlit(val: i64, dtype: PrimType) -> AstNode {
         AstNode::IntLit { val, dtype }
     }
 
-    pub fn make_ident(name: &str, dtype: DataType) -> AstNode {
+    pub fn make_ident(name: &str, dtype: PrimType) -> AstNode {
         AstNode::Ident { id: Identifier::new(name), dtype }
     }
 
-    pub fn make_lvident(name: &str, dtype: DataType) -> AstNode {
+    pub fn make_lvident(name: &str, dtype: PrimType) -> AstNode {
         AstNode::LvIdent { id: Identifier::new(name), dtype }
     }
 
@@ -189,7 +189,7 @@ impl AstNode {
         }
     }
 
-    pub fn make_global_declaration(name: &str, dtype: DataType) -> AstNode {
+    pub fn make_global_declaration(name: &str, dtype: PrimType) -> AstNode {
         AstNode::GlobalDec { id: Identifier::new(name), dtype }
     }
 
@@ -235,42 +235,42 @@ impl AstNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sym::DataType;
+    use crate::sym::PrimType;
 
 
     // --- Ast predicate methods ---
 
     #[test]
     fn is_arith_true_for_arithmetic_ops() {
-        assert!(AstNode::make_binary(Token::Plus, AstNode::make_intlit(5, DataType::Int), AstNode::make_intlit(2, DataType::Int), DataType::Int).is_arith());
-        assert!(AstNode::make_binary(Token::Minus, AstNode::make_intlit(5, DataType::Int), AstNode::make_intlit(2, DataType::Int), DataType::Int).is_arith());
-        assert!(AstNode::make_binary(Token::Star, AstNode::make_intlit(5, DataType::Int), AstNode::make_intlit(2, DataType::Int), DataType::Int).is_arith());
-        assert!(AstNode::make_binary(Token::Slash, AstNode::make_intlit(5, DataType::Int), AstNode::make_intlit(2, DataType::Int), DataType::Int).is_arith());
+        assert!(AstNode::make_binary(Token::Plus, AstNode::make_intlit(5, PrimType::Int), AstNode::make_intlit(2, PrimType::Int), PrimType::Int).is_arith());
+        assert!(AstNode::make_binary(Token::Minus, AstNode::make_intlit(5, PrimType::Int), AstNode::make_intlit(2, PrimType::Int), PrimType::Int).is_arith());
+        assert!(AstNode::make_binary(Token::Star, AstNode::make_intlit(5, PrimType::Int), AstNode::make_intlit(2, PrimType::Int), PrimType::Int).is_arith());
+        assert!(AstNode::make_binary(Token::Slash, AstNode::make_intlit(5, PrimType::Int), AstNode::make_intlit(2, PrimType::Int), PrimType::Int).is_arith());
     }
 
     #[test]
     fn is_arith_false_for_non_arithmetic() {
-        assert!(!AstNode::make_binary(Token::EQ, AstNode::make_intlit(5, DataType::Int), AstNode::make_intlit(5, DataType::Int), DataType::Int).is_arith());
+        assert!(!AstNode::make_binary(Token::EQ, AstNode::make_intlit(5, PrimType::Int), AstNode::make_intlit(5, PrimType::Int), PrimType::Int).is_arith());
         assert!(!AstNode::make_if(AstNode::Empty, AstNode::Empty, None).is_arith());
-        assert!(!AstNode::make_intlit(1, DataType::Int).is_arith());
+        assert!(!AstNode::make_intlit(1, PrimType::Int).is_arith());
         assert!(!AstNode::make_while(AstNode::Empty, AstNode::Empty).is_arith());
     }
 
     #[test]
     fn is_comparison_true_for_comparisons() {
-        assert!(AstNode::make_binary(Token::EQ, AstNode::make_intlit(5, DataType::Int), AstNode::make_intlit(5, DataType::Int), DataType::Int).is_comparison());
-        assert!(AstNode::make_binary(Token::NE, AstNode::make_intlit(5, DataType::Int), AstNode::make_intlit(5, DataType::Int), DataType::Int).is_comparison());
-        assert!(AstNode::make_binary(Token::LT, AstNode::make_intlit(5, DataType::Int), AstNode::make_intlit(5, DataType::Int), DataType::Int).is_comparison());
-        assert!(AstNode::make_binary(Token::GT, AstNode::make_intlit(5, DataType::Int), AstNode::make_intlit(5, DataType::Int), DataType::Int).is_comparison());
-        assert!(AstNode::make_binary(Token::LE, AstNode::make_intlit(5, DataType::Int), AstNode::make_intlit(5, DataType::Int), DataType::Int).is_comparison());
-        assert!(AstNode::make_binary(Token::GE, AstNode::make_intlit(5, DataType::Int), AstNode::make_intlit(5, DataType::Int), DataType::Int).is_comparison());
+        assert!(AstNode::make_binary(Token::EQ, AstNode::make_intlit(5, PrimType::Int), AstNode::make_intlit(5, PrimType::Int), PrimType::Int).is_comparison());
+        assert!(AstNode::make_binary(Token::NE, AstNode::make_intlit(5, PrimType::Int), AstNode::make_intlit(5, PrimType::Int), PrimType::Int).is_comparison());
+        assert!(AstNode::make_binary(Token::LT, AstNode::make_intlit(5, PrimType::Int), AstNode::make_intlit(5, PrimType::Int), PrimType::Int).is_comparison());
+        assert!(AstNode::make_binary(Token::GT, AstNode::make_intlit(5, PrimType::Int), AstNode::make_intlit(5, PrimType::Int), PrimType::Int).is_comparison());
+        assert!(AstNode::make_binary(Token::LE, AstNode::make_intlit(5, PrimType::Int), AstNode::make_intlit(5, PrimType::Int), PrimType::Int).is_comparison());
+        assert!(AstNode::make_binary(Token::GE, AstNode::make_intlit(5, PrimType::Int), AstNode::make_intlit(5, PrimType::Int), PrimType::Int).is_comparison());
     }
 
     #[test]
     fn is_comparison_false_for_non_comparisons() {
-        assert!(!AstNode::make_binary(Token::Plus, AstNode::make_intlit(5, DataType::Int), AstNode::make_intlit(5, DataType::Int), DataType::Int).is_comparison());
+        assert!(!AstNode::make_binary(Token::Plus, AstNode::make_intlit(5, PrimType::Int), AstNode::make_intlit(5, PrimType::Int), PrimType::Int).is_comparison());
         assert!(!AstNode::make_while(AstNode::Empty, AstNode::Empty).is_comparison());
-        assert!(!AstNode::make_intlit(0, DataType::Int).is_comparison());
+        assert!(!AstNode::make_intlit(0, PrimType::Int).is_comparison());
     }
 
     #[test]
@@ -281,9 +281,9 @@ mod tests {
 
     #[test]
     fn is_branching_stmt_false_for_others() {
-        assert!(!AstNode::make_binary(Token::Plus, AstNode::make_intlit(5, DataType::Int), AstNode::make_intlit(5, DataType::Int), DataType::Int).is_branching_stmt());
-        assert!(!AstNode::make_binary(Token::EQ, AstNode::make_intlit(5, DataType::Int), AstNode::make_intlit(5, DataType::Int), DataType::Int).is_branching_stmt());
-        assert!(!AstNode::make_intlit(5, DataType::Int).is_branching_stmt());
+        assert!(!AstNode::make_binary(Token::Plus, AstNode::make_intlit(5, PrimType::Int), AstNode::make_intlit(5, PrimType::Int), PrimType::Int).is_branching_stmt());
+        assert!(!AstNode::make_binary(Token::EQ, AstNode::make_intlit(5, PrimType::Int), AstNode::make_intlit(5, PrimType::Int), PrimType::Int).is_branching_stmt());
+        assert!(!AstNode::make_intlit(5, PrimType::Int).is_branching_stmt());
     }
 
     // --- Identifier construction ---
@@ -298,100 +298,100 @@ mod tests {
 
     #[test]
     fn make_ident_creates_ident_variant() {
-        let node = AstNode::make_ident("x", DataType::Int);
-        assert!(matches!(node, AstNode::Ident { id: Identifier { name }, dtype: DataType::Int } if name == "x"));
+        let node = AstNode::make_ident("x", PrimType::Int);
+        assert!(matches!(node, AstNode::Ident { id: Identifier { name }, dtype: PrimType::Int } if name == "x"));
     }
 
     #[test]
     fn make_lvident_creates_lvident_variant() {
-        let node = AstNode::make_lvident("y", DataType::Int);
-        assert!(matches!(node, AstNode::LvIdent { id: Identifier { name }, dtype: DataType::Int } if name == "y"));
+        let node = AstNode::make_lvident("y", PrimType::Int);
+        assert!(matches!(node, AstNode::LvIdent { id: Identifier { name }, dtype: PrimType::Int } if name == "y"));
     }
 
     // --- make_binary: all token mappings ---
 
     #[test]
     fn make_binary_plus_creates_add() {
-        let node = AstNode::make_binary(Token::Plus, AstNode::make_intlit(1, DataType::Int), AstNode::make_intlit(2, DataType::Int), DataType::Int);
-        assert!(matches!(node, AstNode::Add { left, right, dtype: DataType::Int }
-            if *left == AstNode::make_intlit(1, DataType::Int) && *right == AstNode::make_intlit(2, DataType::Int)));
+        let node = AstNode::make_binary(Token::Plus, AstNode::make_intlit(1, PrimType::Int), AstNode::make_intlit(2, PrimType::Int), PrimType::Int);
+        assert!(matches!(node, AstNode::Add { left, right, dtype: PrimType::Int }
+            if *left == AstNode::make_intlit(1, PrimType::Int) && *right == AstNode::make_intlit(2, PrimType::Int)));
     }
 
     #[test]
     fn make_binary_minus_creates_subtract() {
-        let node = AstNode::make_binary(Token::Minus, AstNode::make_intlit(1, DataType::Int), AstNode::make_intlit(2, DataType::Int), DataType::Int);
-        assert!(matches!(node, AstNode::Subtract { left, right, dtype: DataType::Int }
-            if *left == AstNode::make_intlit(1, DataType::Int) && *right == AstNode::make_intlit(2, DataType::Int)));
+        let node = AstNode::make_binary(Token::Minus, AstNode::make_intlit(1, PrimType::Int), AstNode::make_intlit(2, PrimType::Int), PrimType::Int);
+        assert!(matches!(node, AstNode::Subtract { left, right, dtype: PrimType::Int }
+            if *left == AstNode::make_intlit(1, PrimType::Int) && *right == AstNode::make_intlit(2, PrimType::Int)));
     }
 
     #[test]
     fn make_binary_star_creates_multiply() {
-        let node = AstNode::make_binary(Token::Star, AstNode::make_intlit(1, DataType::Int), AstNode::make_intlit(2, DataType::Int), DataType::Int);
-        assert!(matches!(node, AstNode::Multiply { left, right, dtype: DataType::Int }
-            if *left == AstNode::make_intlit(1, DataType::Int) && *right == AstNode::make_intlit(2, DataType::Int)));
+        let node = AstNode::make_binary(Token::Star, AstNode::make_intlit(1, PrimType::Int), AstNode::make_intlit(2, PrimType::Int), PrimType::Int);
+        assert!(matches!(node, AstNode::Multiply { left, right, dtype: PrimType::Int }
+            if *left == AstNode::make_intlit(1, PrimType::Int) && *right == AstNode::make_intlit(2, PrimType::Int)));
     }
 
     #[test]
     fn make_binary_slash_creates_divide() {
-        let node = AstNode::make_binary(Token::Slash, AstNode::make_intlit(8, DataType::Int), AstNode::make_intlit(2, DataType::Int), DataType::Int);
-        assert!(matches!(node, AstNode::Divide { left, right, dtype: DataType::Int }
-            if *left == AstNode::make_intlit(8, DataType::Int) && *right == AstNode::make_intlit(2, DataType::Int)));
+        let node = AstNode::make_binary(Token::Slash, AstNode::make_intlit(8, PrimType::Int), AstNode::make_intlit(2, PrimType::Int), PrimType::Int);
+        assert!(matches!(node, AstNode::Divide { left, right, dtype: PrimType::Int }
+            if *left == AstNode::make_intlit(8, PrimType::Int) && *right == AstNode::make_intlit(2, PrimType::Int)));
     }
 
     #[test]
     fn make_binary_eq_creates_equal() {
-        let node = AstNode::make_binary(Token::EQ, AstNode::make_intlit(1, DataType::Int), AstNode::make_intlit(2, DataType::Int), DataType::Int);
+        let node = AstNode::make_binary(Token::EQ, AstNode::make_intlit(1, PrimType::Int), AstNode::make_intlit(2, PrimType::Int), PrimType::Int);
         assert!(matches!(node, AstNode::Equal { .. }));
     }
 
     #[test]
     fn make_binary_ne_creates_notequal() {
-        let node = AstNode::make_binary(Token::NE, AstNode::make_intlit(1, DataType::Int), AstNode::make_intlit(2, DataType::Int), DataType::Int);
+        let node = AstNode::make_binary(Token::NE, AstNode::make_intlit(1, PrimType::Int), AstNode::make_intlit(2, PrimType::Int), PrimType::Int);
         assert!(matches!(node, AstNode::NotEqual { .. }));
     }
 
     #[test]
     fn make_binary_lt_creates_lessthan() {
-        let node = AstNode::make_binary(Token::LT, AstNode::make_intlit(1, DataType::Int), AstNode::make_intlit(2, DataType::Int), DataType::Int);
+        let node = AstNode::make_binary(Token::LT, AstNode::make_intlit(1, PrimType::Int), AstNode::make_intlit(2, PrimType::Int), PrimType::Int);
         assert!(matches!(node, AstNode::LessThan { .. }));
     }
 
     #[test]
     fn make_binary_gt_creates_greaterthan() {
-        let node = AstNode::make_binary(Token::GT, AstNode::make_intlit(1, DataType::Int), AstNode::make_intlit(2, DataType::Int), DataType::Int);
+        let node = AstNode::make_binary(Token::GT, AstNode::make_intlit(1, PrimType::Int), AstNode::make_intlit(2, PrimType::Int), PrimType::Int);
         assert!(matches!(node, AstNode::GreaterThan { .. }));
     }
 
     #[test]
     fn make_binary_le_creates_lessorequal() {
-        let node = AstNode::make_binary(Token::LE, AstNode::make_intlit(1, DataType::Int), AstNode::make_intlit(2, DataType::Int), DataType::Int);
+        let node = AstNode::make_binary(Token::LE, AstNode::make_intlit(1, PrimType::Int), AstNode::make_intlit(2, PrimType::Int), PrimType::Int);
         assert!(matches!(node, AstNode::LessThanOrEqual { .. }));
     }
 
     #[test]
     fn make_binary_ge_creates_greaterorequal() {
-        let node = AstNode::make_binary(Token::GE, AstNode::make_intlit(1, DataType::Int), AstNode::make_intlit(2, DataType::Int), DataType::Int);
+        let node = AstNode::make_binary(Token::GE, AstNode::make_intlit(1, PrimType::Int), AstNode::make_intlit(2, PrimType::Int), PrimType::Int);
         assert!(matches!(node, AstNode::GreaterThanOrEqual { .. }));
     }
 
     #[test]
     #[should_panic(expected = "Wrong token")]
     fn make_binary_unknown_token_panics() {
-        AstNode::make_binary(Token::Semi, AstNode::make_intlit(0, DataType::Int), AstNode::make_intlit(0, DataType::Int), DataType::Int);
+        AstNode::make_binary(Token::Semi, AstNode::make_intlit(0, PrimType::Int), AstNode::make_intlit(0, PrimType::Int), PrimType::Int);
     }
 
     // --- Factory methods: declarations ---
 
     #[test]
     fn make_global_declaration_creates_globaldec() {
-        let d = DataType::Void;
+        let d = PrimType::Void;
         let node = AstNode::make_global_declaration("g", d);
         assert!(matches!(&node, AstNode::GlobalDec { id, dtype: d } if id.name == "g"));
     }
 
     #[test]
     fn make_function_creates_function_node() {
-        let name = AstNode::make_ident("main", DataType::Void);
+        let name = AstNode::make_ident("main", PrimType::Void);
         let body = AstNode::make_glue(AstNode::Empty, AstNode::Empty);
         let node = AstNode::make_function(name, body);
         assert!(matches!(&node, AstNode::Function { .. }));
@@ -400,15 +400,15 @@ mod tests {
     #[test]
     #[should_panic(expected = "without an ident")]
     fn make_function_with_non_ident_panics() {
-        AstNode::make_function(AstNode::make_intlit(42, DataType::Int), AstNode::Empty);
+        AstNode::make_function(AstNode::make_intlit(42, PrimType::Int), AstNode::Empty);
     }
 
     // --- Factory methods: statements ---
 
     #[test]
     fn make_assign_creates_assign_node() {
-        let id = AstNode::make_lvident("x", DataType::Int);
-        let expr = AstNode::make_intlit(10, DataType::Int);
+        let id = AstNode::make_lvident("x", PrimType::Int);
+        let expr = AstNode::make_intlit(10, PrimType::Int);
         let node = AstNode::make_assign(id, expr);
         assert!(matches!(&node, AstNode::Assign { .. }));
     }
@@ -416,52 +416,52 @@ mod tests {
     #[test]
     #[should_panic(expected = "without an lvident")]
     fn make_assign_with_non_lvident_panics() {
-        AstNode::make_assign(AstNode::make_ident("x", DataType::Int),
-                           AstNode::make_intlit(1, DataType::Int));
+        AstNode::make_assign(AstNode::make_ident("x", PrimType::Int),
+                           AstNode::make_intlit(1, PrimType::Int));
     }
 
     #[test]
     fn make_if_without_else_branch() {
-        let node = AstNode::make_if(AstNode::make_intlit(1, DataType::Int), AstNode::Empty, None);
+        let node = AstNode::make_if(AstNode::make_intlit(1, PrimType::Int), AstNode::Empty, None);
         assert!(matches!(&node, AstNode::If { branch_f: None, .. }));
     }
 
     #[test]
     fn make_if_with_else_branch() {
-        let node = AstNode::make_if(AstNode::make_intlit(1, DataType::Int), AstNode::Empty, Some(AstNode::Empty));
+        let node = AstNode::make_if(AstNode::make_intlit(1, PrimType::Int), AstNode::Empty, Some(AstNode::Empty));
         assert!(matches!(&node, AstNode::If { branch_f: Some(..), .. }));
     }
 
     #[test]
     fn make_while_creates_while_node() {
-        let node = AstNode::make_while(AstNode::make_intlit(1, DataType::Int), AstNode::Empty);
+        let node = AstNode::make_while(AstNode::make_intlit(1, PrimType::Int), AstNode::Empty);
         assert!(matches!(&node, AstNode::While { .. }));
     }
 
     #[test]
     fn make_print_creates_print_node() {
-        let node = AstNode::make_print(AstNode::make_intlit(42, DataType::Int));
+        let node = AstNode::make_print(AstNode::make_intlit(42, PrimType::Int));
         assert!(matches!(&node, AstNode::Print { .. }));
     }
 
     #[test]
     fn make_glue_creates_glue_node() {
-        let node = AstNode::make_glue(AstNode::make_intlit(1, DataType::Int), AstNode::make_intlit(2, DataType::Int));
+        let node = AstNode::make_glue(AstNode::make_intlit(1, PrimType::Int), AstNode::make_intlit(2, PrimType::Int));
         assert!(matches!(node, AstNode::Glue { left, right }
-            if left == Box::new(AstNode::make_intlit(1, DataType::Int)) && right == Box::new(AstNode::make_intlit(2, DataType::Int))));
+            if left == Box::new(AstNode::make_intlit(1, PrimType::Int)) && right == Box::new(AstNode::make_intlit(2, PrimType::Int))));
     }
 
     // --- Structural ---
 
     #[test]
     fn ast_node_debug_contains_variant_name() {
-        let s = format!("{:?}", AstNode::make_intlit(7, DataType::Int));
+        let s = format!("{:?}", AstNode::make_intlit(7, PrimType::Int));
         assert!(s.contains("IntLit"));
     }
 
     #[test]
     fn ast_node_partial_eq() {
-        assert_eq!(AstNode::make_intlit(3, DataType::Int), AstNode::make_intlit(3, DataType::Int));
-        assert_ne!(AstNode::make_intlit(3, DataType::Int), AstNode::make_intlit(4, DataType::Int));
+        assert_eq!(AstNode::make_intlit(3, PrimType::Int), AstNode::make_intlit(3, PrimType::Int));
+        assert_ne!(AstNode::make_intlit(3, PrimType::Int), AstNode::make_intlit(4, PrimType::Int));
     }
 }

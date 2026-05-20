@@ -3,7 +3,7 @@ use crate::{
     ast::AstNode,
     expr::{Compatibility, ExpressionGenerator, is_type_compatible},
     scan::{Scanner, Token},
-    sym::{DataType, StructuralType, SymbolTable},
+    sym::{PrimType, StructuralType, SymbolTable},
 };
 
 pub struct Parser<'a, T>
@@ -42,7 +42,7 @@ where T: std::io::Read,
         let tree = self.expr.binexpr(0)?;
         let tree_type = tree.get_type()
                                       .unwrap_or_else(|| self.scanner.fatal("Binary expression without a type!"));
-        let tree = match is_type_compatible(DataType::Int, tree_type, false) {
+        let tree = match is_type_compatible(PrimType::Int, tree_type, false) {
             Compatibility::Incompatible => self.scanner.fatal("Incompatible types!"),
             Compatibility::Compatible(_) | Compatibility::WidenLeft(_) => tree,
             Compatibility::WidenRight(t) => tree.new_type(t),
@@ -52,7 +52,7 @@ where T: std::io::Read,
     }
 
     fn var_declaration(&self, type_token: Token) -> Result<AstNode> {
-        let dtype = DataType::from(type_token);
+        let dtype = PrimType::from(type_token);
         let ident = self.scanner.ident();
 
         self.symbols.add_glob(&ident, dtype, StructuralType::Variable);
@@ -151,8 +151,8 @@ where T: std::io::Read,
             }
 
             let ident = self.scanner.ident();
-            let name = AstNode::make_ident(&ident, DataType::Void);
-            self.symbols.add_glob(&ident, DataType::Void, StructuralType::Function);
+            let name = AstNode::make_ident(&ident, PrimType::Void);
+            self.symbols.add_glob(&ident, PrimType::Void, StructuralType::Function);
             self.scanner.lparen();
             self.scanner.rparen();
             let body = self.compound_statement()?;
@@ -259,7 +259,7 @@ mod tests {
         let (scanner, symbols) = parser_from("{ int x; }");
         let parser = Parser::new(&scanner, &symbols);
         let tree = parser.compound_statement().expect("parse failed");
-        assert_eq!(tree, AstNode::GlobalDec { id: Identifier::new("x"), dtype: DataType::Int });
+        assert_eq!(tree, AstNode::GlobalDec { id: Identifier::new("x"), dtype: PrimType::Int });
     }
 
     #[test]
@@ -267,7 +267,7 @@ mod tests {
         let (scanner, symbols) = parser_from("{ print 42; }");
         let parser = Parser::new(&scanner, &symbols);
         let tree = parser.compound_statement().expect("parse failed");
-        assert_eq!(tree, AstNode::make_print(AstNode::make_intlit(42, DataType::Int)));
+        assert_eq!(tree, AstNode::make_print(AstNode::make_intlit(42, PrimType::Int)));
     }
 
     #[test]
@@ -276,8 +276,8 @@ mod tests {
         let parser = Parser::new(&scanner, &symbols);
         let tree = parser.compound_statement().expect("parse failed");
         assert_eq!(tree, AstNode::make_glue(
-            AstNode::make_print(AstNode::make_intlit(1, DataType::Int)),
-            AstNode::make_print(AstNode::make_intlit(2, DataType::Int)),
+            AstNode::make_print(AstNode::make_intlit(1, PrimType::Int)),
+            AstNode::make_print(AstNode::make_intlit(2, PrimType::Int)),
         ));
     }
 
@@ -286,7 +286,7 @@ mod tests {
         let (scanner, symbols) = parser_from("{ ; ; print 42; }");
         let parser = Parser::new(&scanner, &symbols);
         let tree = parser.compound_statement().expect("parse failed");
-        assert_eq!(tree, AstNode::make_print(AstNode::make_intlit(42, DataType::Int)));
+        assert_eq!(tree, AstNode::make_print(AstNode::make_intlit(42, PrimType::Int)));
     }
 
     #[test]
@@ -295,10 +295,10 @@ mod tests {
         let parser = Parser::new(&scanner, &symbols);
         let tree = parser.compound_statement().expect("parse failed");
         assert_eq!(tree, AstNode::make_glue(
-            AstNode::make_global_declaration("x",  DataType::Int),
+            AstNode::make_global_declaration("x",  PrimType::Int),
             AstNode::make_assign(
-                AstNode::make_lvident("x", DataType::Int),
-                AstNode::make_intlit(5, DataType::Int),
+                AstNode::make_lvident("x", PrimType::Int),
+                AstNode::make_intlit(5, PrimType::Int),
             ),
         ));
     }
@@ -317,8 +317,8 @@ mod tests {
         let parser = Parser::new(&scanner, &symbols);
         let tree = parser.compound_statement().expect("parse failed");
         assert_eq!(tree, AstNode::make_if(
-            AstNode::make_binary(Token::LT, AstNode::make_intlit(1, DataType::Char), AstNode::make_intlit(2, DataType::Char), DataType::Char),
-            AstNode::make_print(AstNode::make_intlit(42, DataType::Int)),
+            AstNode::make_binary(Token::LT, AstNode::make_intlit(1, PrimType::Char), AstNode::make_intlit(2, PrimType::Char), PrimType::Char),
+            AstNode::make_print(AstNode::make_intlit(42, PrimType::Int)),
             None,
         ));
     }
@@ -331,9 +331,9 @@ mod tests {
         let parser = Parser::new(&scanner, &symbols);
         let tree = parser.compound_statement().expect("parse failed");
         assert_eq!(tree, AstNode::make_if(
-            AstNode::make_binary(Token::LT, AstNode::make_intlit(1, DataType::Char), AstNode::make_intlit(2, DataType::Char), DataType::Char),
-            AstNode::make_print(AstNode::make_intlit(1, DataType::Int)),
-            Some(AstNode::make_print(AstNode::make_intlit(2, DataType::Int))),
+            AstNode::make_binary(Token::LT, AstNode::make_intlit(1, PrimType::Char), AstNode::make_intlit(2, PrimType::Char), PrimType::Char),
+            AstNode::make_print(AstNode::make_intlit(1, PrimType::Int)),
+            Some(AstNode::make_print(AstNode::make_intlit(2, PrimType::Int))),
         ));
     }
 
@@ -343,8 +343,8 @@ mod tests {
         let parser = Parser::new(&scanner, &symbols);
         let tree = parser.compound_statement().expect("parse failed");
         assert_eq!(tree, AstNode::make_while(
-            AstNode::make_binary(Token::LT, AstNode::make_intlit(1, DataType::Char), AstNode::make_intlit(2, DataType::Char), DataType::Char),
-            AstNode::make_print(AstNode::make_intlit(42, DataType::Int)),
+            AstNode::make_binary(Token::LT, AstNode::make_intlit(1, PrimType::Char), AstNode::make_intlit(2, PrimType::Char), PrimType::Char),
+            AstNode::make_print(AstNode::make_intlit(42, PrimType::Int)),
         ));
     }
 
@@ -357,12 +357,12 @@ mod tests {
         let parser = Parser::new(&scanner, &symbols);
         let tree = parser.compound_statement().expect("parse failed");
         assert_eq!(tree, AstNode::make_glue(
-            AstNode::make_print(AstNode::make_intlit(1, DataType::Int)),
+            AstNode::make_print(AstNode::make_intlit(1, PrimType::Int)),
             AstNode::make_while(
-                AstNode::make_binary(Token::LT, AstNode::make_intlit(1, DataType::Char), AstNode::make_intlit(2, DataType::Char), DataType::Char),
+                AstNode::make_binary(Token::LT, AstNode::make_intlit(1, PrimType::Char), AstNode::make_intlit(2, PrimType::Char), PrimType::Char),
                 AstNode::make_glue(
-                    AstNode::make_print(AstNode::make_intlit(42, DataType::Int)),
-                    AstNode::make_print(AstNode::make_intlit(3, DataType::Int)),
+                    AstNode::make_print(AstNode::make_intlit(42, PrimType::Int)),
+                    AstNode::make_print(AstNode::make_intlit(3, PrimType::Int)),
                 ),
             ),
         ));
@@ -374,7 +374,7 @@ mod tests {
         let parser = Parser::new(&scanner, &symbols);
         let result = parser.function_declaration().expect("parse failed");
         assert_eq!(result, Some(AstNode::make_function(
-            AstNode::make_ident("foo", DataType::Void),
+            AstNode::make_ident("foo", PrimType::Void),
             AstNode::Empty,
         )));
     }

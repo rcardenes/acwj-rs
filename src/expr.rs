@@ -2,14 +2,14 @@ use anyhow::{Result, bail};
 use crate::{
     ast::AstNode,
     scan::{Scanner, Token},
-    sym::{DataType, SymbolTable},
+    sym::{PrimType, SymbolTable},
 };
 
 pub enum Compatibility {
     Incompatible,
-    Compatible(DataType), // Just carry a copy of the compatible type
-    WidenLeft(DataType), // Type to widen to
-    WidenRight(DataType), // Type to widen to
+    Compatible(PrimType), // Just carry a copy of the compatible type
+    WidenLeft(PrimType), // Type to widen to
+    WidenRight(PrimType), // Type to widen to
 }
 
 type Precedence = i16;
@@ -43,18 +43,18 @@ fn is_arithop(token: &Token) -> bool {
 
 // Return if two primitive types are compatible.
 // If only_right is true, then widening can happen only left to right
-pub fn is_type_compatible(left: DataType, right: DataType, only_right: bool) -> Compatibility {
+pub fn is_type_compatible(left: PrimType, right: PrimType, only_right: bool) -> Compatibility {
     match (left, right) {
         // Voids are not compatible with anything
-        (DataType::Void, _) | (_, DataType::Void) => Compatibility::Incompatible,
+        (PrimType::Void, _) | (_, PrimType::Void) => Compatibility::Incompatible,
         // Any other type is compatible with itself
         (x, y) if x == y => Compatibility::Compatible(x),
         // Widen Char to Int is required
-        (DataType::Char, DataType::Int) => Compatibility::WidenLeft(DataType::Int),
-        (DataType::Int, DataType::Char) => if only_right {
+        (PrimType::Char, PrimType::Int) => Compatibility::WidenLeft(PrimType::Int),
+        (PrimType::Int, PrimType::Char) => if only_right {
             Compatibility::Incompatible
         } else {
-            Compatibility::WidenRight(DataType::Int)
+            Compatibility::WidenRight(PrimType::Int)
         },
         // Anything else is compatible
         _ => unimplemented!(),
@@ -84,9 +84,9 @@ impl<'a, T> ExpressionGenerator<'a, T>
                 // so that we don't have to narrow it later if needed. Widen the data is
                 // always possible.
                 Token::IntLit(val) => if *val >= 0 && *val < 256 {
-                    AstNode::make_intlit(*val, DataType::Char)
+                    AstNode::make_intlit(*val, PrimType::Char)
                 } else {
-                    AstNode::make_intlit(*val, DataType::Int)
+                    AstNode::make_intlit(*val, PrimType::Int)
                 },
                 Token::Ident(id) => {
                     if let Some(found) = self.sym_table.find_glob(id) {
@@ -204,13 +204,13 @@ mod tests {
     #[rstest]
     fn primary_intlit_returns_leaf_node(#[with("42")] testfr: TestFramework) {
         let node = testfr.primary();
-        assert_eq!(node, AstNode::make_intlit(42, DataType::Char));
+        assert_eq!(node, AstNode::make_intlit(42, PrimType::Char));
     }
 
     #[rstest]
     fn primary_intlit_in_char_range(#[with("255")] testfr: TestFramework) {
         let node = testfr.primary();
-        assert_eq!(node, AstNode::make_intlit(255, DataType::Char));
+        assert_eq!(node, AstNode::make_intlit(255, PrimType::Char));
     }
 
     #[rstest]
@@ -230,16 +230,16 @@ mod tests {
     #[rstest]
     fn binexpr_single_integer_returns_intlit_root(#[with("7")] testfr: TestFramework) {
         let tree = testfr.binexpr(0).expect("Expected a clean parsing");
-        assert_eq!(tree, AstNode::make_intlit(7, DataType::Char));
+        assert_eq!(tree, AstNode::make_intlit(7, PrimType::Char));
     }
 
     #[rstest]
     fn binexpr_addition_builds_correct_tree(#[with("3 + 5")] testfr: TestFramework) {
         let tree = testfr.binexpr(0).expect("Expected a clean parsing");
         assert_eq!(tree, AstNode::make_binary(Token::Plus,
-                                              AstNode::make_intlit(3, DataType::Char),
-                                              AstNode::make_intlit(5, DataType::Char),
-                                              DataType::Char));
+                                              AstNode::make_intlit(3, PrimType::Char),
+                                              AstNode::make_intlit(5, PrimType::Char),
+                                              PrimType::Char));
     }
 
     #[rstest]
@@ -249,11 +249,11 @@ mod tests {
         assert_eq!(tree,
             AstNode::make_binary(Token::Plus,
                 AstNode::make_binary(Token::Minus,
-                                     AstNode::make_intlit(2, DataType::Char),
-                                     AstNode::make_intlit(3, DataType::Char),
-                                     DataType::Char),
-                AstNode::make_intlit(5, DataType::Char),
-                DataType::Char));
+                                     AstNode::make_intlit(2, PrimType::Char),
+                                     AstNode::make_intlit(3, PrimType::Char),
+                                     PrimType::Char),
+                AstNode::make_intlit(5, PrimType::Char),
+                PrimType::Char));
     }
 
     // --- op_precedence ---
@@ -304,8 +304,8 @@ mod tests {
         let tree = testfr.binexpr(0).expect("Expected a clean parsing");
 
         assert_eq!(tree, AstNode::make_binary(Token::EQ,
-                                              AstNode::make_intlit(3, DataType::Char),
-                                              AstNode::make_intlit(5, DataType::Char),
-                                              DataType::Char));
+                                              AstNode::make_intlit(3, PrimType::Char),
+                                              AstNode::make_intlit(5, PrimType::Char),
+                                              PrimType::Char));
     }
 }

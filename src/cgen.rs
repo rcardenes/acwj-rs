@@ -3,7 +3,7 @@
 use anyhow::Result;
 use crate::{
     ast::{AstNode, Identifier},
-    sym::DataType,
+    sym::PrimType,
 };
 
 pub trait CodeBackend {
@@ -14,9 +14,9 @@ pub trait CodeBackend {
     fn func_postamble(&mut self) -> Result<()>;
     fn func_preamble(&mut self, ident: &str) -> Result<()>;
     fn load_int(&mut self, val: i64) -> Result<Self::Reg>;
-    fn load_glob(&mut self, ident: &str, dtype: DataType) -> Result<Self::Reg>;
-    fn store_glob(&mut self, r: Self::Reg, ident: &str, dtype: DataType) -> Result<Self::Reg>;
-    fn glob_sym(&mut self, sym: &str, dtype: DataType) -> Result<()>;
+    fn load_glob(&mut self, ident: &str, dtype: PrimType) -> Result<Self::Reg>;
+    fn store_glob(&mut self, r: Self::Reg, ident: &str, dtype: PrimType) -> Result<Self::Reg>;
+    fn glob_sym(&mut self, sym: &str, dtype: PrimType) -> Result<()>;
     fn add(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Option<Self::Reg>>;
     fn sub(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Option<Self::Reg>>;
     fn mul(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Option<Self::Reg>>;
@@ -216,7 +216,7 @@ mod tests {
     use super::*;
     use crate::cg::X86_64Backend;
     use crate::ast::AstNode;
-    use crate::sym::DataType;
+    use crate::sym::PrimType;
     use crate::scan::Token;
 
     fn new_generator() -> CodeGenerator<X86_64Backend<Vec<u8>>> {
@@ -248,7 +248,7 @@ mod tests {
     #[test]
     fn gen_ast_intlit_loads_value() {
         let mut cg = new_generator();
-        let node = AstNode::make_intlit(42, DataType::Int);
+        let node = AstNode::make_intlit(42, PrimType::Int);
         let result = cg.gen_ast(&node, None, None, 0).unwrap();
         assert!(result.is_some());
         assert!(output_string(&cg).contains("movq\t$42,"));
@@ -257,7 +257,7 @@ mod tests {
     #[test]
     fn gen_ast_intlit_char_range() {
         let mut cg = new_generator();
-        let node = AstNode::make_intlit(255, DataType::Char);
+        let node = AstNode::make_intlit(255, PrimType::Char);
         let result = cg.gen_ast(&node, None, None, 0).unwrap();
         assert!(result.is_some());
         assert!(output_string(&cg).contains("movq\t$255,"));
@@ -266,7 +266,7 @@ mod tests {
     #[test]
     fn gen_ast_ident_loads_glob() {
         let mut cg = new_generator();
-        let node = AstNode::make_ident("x", DataType::Int);
+        let node = AstNode::make_ident("x", PrimType::Int);
         let result = cg.gen_ast(&node, None, None, 0).unwrap();
         assert!(result.is_some());
         assert!(output_string(&cg).contains("movq\tx(%rip),"));
@@ -275,7 +275,7 @@ mod tests {
     #[test]
     fn gen_ast_ident_loads_char_glob() {
         let mut cg = new_generator();
-        let node = AstNode::make_ident("c", DataType::Char);
+        let node = AstNode::make_ident("c", PrimType::Char);
         let result = cg.gen_ast(&node, None, None, 0).unwrap();
         assert!(result.is_some());
         assert!(output_string(&cg).contains("movzbq\tc(%rip),"));
@@ -292,7 +292,7 @@ mod tests {
     #[test]
     fn gen_ast_global_dec_calls_glob_sym() {
         let mut cg = new_generator();
-        let node = AstNode::make_global_declaration("x", DataType::Int);
+        let node = AstNode::make_global_declaration("x", PrimType::Int);
         let result = cg.gen_ast(&node, None, None, 0).unwrap();
         assert!(result.is_none());
         assert_eq!(output_string(&cg), "\t.comm\tx,8,8\n");
@@ -305,9 +305,9 @@ mod tests {
         let mut cg = new_generator();
         let node = AstNode::make_binary(
             Token::Plus,
-            AstNode::make_intlit(1, DataType::Char),
-            AstNode::make_intlit(2, DataType::Char),
-            DataType::Char,
+            AstNode::make_intlit(1, PrimType::Char),
+            AstNode::make_intlit(2, PrimType::Char),
+            PrimType::Char,
         );
         cg.gen_ast(&node, None, None, 0).unwrap();
         let output = output_string(&cg);
@@ -321,9 +321,9 @@ mod tests {
         let mut cg = new_generator();
         let node = AstNode::make_binary(
             Token::Minus,
-            AstNode::make_intlit(5, DataType::Int),
-            AstNode::make_intlit(3, DataType::Int),
-            DataType::Int,
+            AstNode::make_intlit(5, PrimType::Int),
+            AstNode::make_intlit(3, PrimType::Int),
+            PrimType::Int,
         );
         cg.gen_ast(&node, None, None, 0).unwrap();
         assert!(output_string(&cg).contains("subq"));
@@ -334,9 +334,9 @@ mod tests {
         let mut cg = new_generator();
         let node = AstNode::make_binary(
             Token::Star,
-            AstNode::make_intlit(2, DataType::Int),
-            AstNode::make_intlit(4, DataType::Int),
-            DataType::Int,
+            AstNode::make_intlit(2, PrimType::Int),
+            AstNode::make_intlit(4, PrimType::Int),
+            PrimType::Int,
         );
         cg.gen_ast(&node, None, None, 0).unwrap();
         assert!(output_string(&cg).contains("imulq"));
@@ -347,9 +347,9 @@ mod tests {
         let mut cg = new_generator();
         let node = AstNode::make_binary(
             Token::Slash,
-            AstNode::make_intlit(10, DataType::Int),
-            AstNode::make_intlit(2, DataType::Int),
-            DataType::Int,
+            AstNode::make_intlit(10, PrimType::Int),
+            AstNode::make_intlit(2, PrimType::Int),
+            PrimType::Int,
         );
         cg.gen_ast(&node, None, None, 0).unwrap();
         assert!(output_string(&cg).contains("idivq"));
@@ -360,7 +360,7 @@ mod tests {
     #[test]
     fn gen_ast_eq_emits_sete() {
         let mut cg = new_generator();
-        let node = AstNode::make_binary(Token::EQ, AstNode::make_intlit(1, DataType::Int), AstNode::make_intlit(2, DataType::Int), DataType::Int);
+        let node = AstNode::make_binary(Token::EQ, AstNode::make_intlit(1, PrimType::Int), AstNode::make_intlit(2, PrimType::Int), PrimType::Int);
         cg.gen_ast(&node, None, None, 0).unwrap();
         let output = output_string(&cg);
         assert!(output.contains("cmpq"));
@@ -370,7 +370,7 @@ mod tests {
     #[test]
     fn gen_ast_lt_emits_setl() {
         let mut cg = new_generator();
-        let node = AstNode::make_binary(Token::LT, AstNode::make_intlit(1, DataType::Int), AstNode::make_intlit(2, DataType::Int), DataType::Int);
+        let node = AstNode::make_binary(Token::LT, AstNode::make_intlit(1, PrimType::Int), AstNode::make_intlit(2, PrimType::Int), PrimType::Int);
         cg.gen_ast(&node, None, None, 0).unwrap();
         assert!(output_string(&cg).contains("setl"));
     }
@@ -380,7 +380,7 @@ mod tests {
     #[test]
     fn gen_print_emits_printint_call() {
         let mut cg = new_generator();
-        let node = AstNode::make_print(AstNode::make_intlit(42, DataType::Int));
+        let node = AstNode::make_print(AstNode::make_intlit(42, PrimType::Int));
         cg.gen_ast(&node, None, None, 0).unwrap();
         let output = output_string(&cg);
         assert!(output.contains("movq"));
@@ -393,8 +393,8 @@ mod tests {
     fn gen_glue_ast_processes_left_then_right() {
         let mut cg = new_generator();
         let node = AstNode::make_glue(
-            AstNode::make_print(AstNode::make_intlit(1, DataType::Int)),
-            AstNode::make_print(AstNode::make_intlit(2, DataType::Int)),
+            AstNode::make_print(AstNode::make_intlit(1, PrimType::Int)),
+            AstNode::make_print(AstNode::make_intlit(2, PrimType::Int)),
         );
         cg.gen_ast(&node, None, None, 0).unwrap();
         let output = output_string(&cg);
@@ -408,8 +408,8 @@ mod tests {
     #[test]
     fn gen_if_without_else() {
         let mut cg = new_generator();
-        let cond = AstNode::make_binary(Token::LT, AstNode::make_intlit(1, DataType::Char), AstNode::make_intlit(2, DataType::Char), DataType::Char);
-        let body = AstNode::make_print(AstNode::make_intlit(42, DataType::Int));
+        let cond = AstNode::make_binary(Token::LT, AstNode::make_intlit(1, PrimType::Char), AstNode::make_intlit(2, PrimType::Char), PrimType::Char);
+        let body = AstNode::make_print(AstNode::make_intlit(42, PrimType::Int));
         let node = AstNode::make_if(cond, body, None);
         cg.gen_ast(&node, None, None, 0).unwrap();
         let output = output_string(&cg);
@@ -420,9 +420,9 @@ mod tests {
     #[test]
     fn gen_if_with_else() {
         let mut cg = new_generator();
-        let cond = AstNode::make_binary(Token::EQ, AstNode::make_intlit(1, DataType::Int), AstNode::make_intlit(2, DataType::Int), DataType::Int);
-        let true_branch = AstNode::make_print(AstNode::make_intlit(10, DataType::Int));
-        let false_branch = AstNode::make_print(AstNode::make_intlit(20, DataType::Int));
+        let cond = AstNode::make_binary(Token::EQ, AstNode::make_intlit(1, PrimType::Int), AstNode::make_intlit(2, PrimType::Int), PrimType::Int);
+        let true_branch = AstNode::make_print(AstNode::make_intlit(10, PrimType::Int));
+        let false_branch = AstNode::make_print(AstNode::make_intlit(20, PrimType::Int));
         let node = AstNode::make_if(cond, true_branch, Some(false_branch));
         cg.gen_ast(&node, None, None, 0).unwrap();
         let output = output_string(&cg);
@@ -436,11 +436,11 @@ mod tests {
     fn gen_if_nested() {
         let mut cg = new_generator();
         let inner_if = AstNode::make_if(
-            AstNode::make_binary(Token::GT, AstNode::make_intlit(3, DataType::Int), AstNode::make_intlit(1, DataType::Int), DataType::Int),
-            AstNode::make_print(AstNode::make_intlit(100, DataType::Int)),
+            AstNode::make_binary(Token::GT, AstNode::make_intlit(3, PrimType::Int), AstNode::make_intlit(1, PrimType::Int), PrimType::Int),
+            AstNode::make_print(AstNode::make_intlit(100, PrimType::Int)),
             None,
         );
-        let outer_cond = AstNode::make_binary(Token::EQ, AstNode::make_intlit(1, DataType::Int), AstNode::make_intlit(1, DataType::Int), DataType::Int);
+        let outer_cond = AstNode::make_binary(Token::EQ, AstNode::make_intlit(1, PrimType::Int), AstNode::make_intlit(1, PrimType::Int), PrimType::Int);
         let node = AstNode::make_if(outer_cond, inner_if, None);
         cg.gen_ast(&node, None, None, 0).unwrap();
         let output = output_string(&cg);
@@ -455,8 +455,8 @@ mod tests {
     #[test]
     fn gen_while_emits_loop() {
         let mut cg = new_generator();
-        let cond = AstNode::make_binary(Token::NE, AstNode::make_intlit(0, DataType::Int), AstNode::make_intlit(1, DataType::Int), DataType::Int);
-        let body = AstNode::make_print(AstNode::make_intlit(7, DataType::Int));
+        let cond = AstNode::make_binary(Token::NE, AstNode::make_intlit(0, PrimType::Int), AstNode::make_intlit(1, PrimType::Int), PrimType::Int);
+        let body = AstNode::make_print(AstNode::make_intlit(7, PrimType::Int));
         let node = AstNode::make_while(cond, body);
         cg.gen_ast(&node, None, None, 0).unwrap();
         let output = output_string(&cg);
@@ -470,7 +470,7 @@ mod tests {
     #[test]
     fn gen_while_empty_body() {
         let mut cg = new_generator();
-        let cond = AstNode::make_binary(Token::EQ, AstNode::make_intlit(1, DataType::Int), AstNode::make_intlit(1, DataType::Int), DataType::Int);
+        let cond = AstNode::make_binary(Token::EQ, AstNode::make_intlit(1, PrimType::Int), AstNode::make_intlit(1, PrimType::Int), PrimType::Int);
         let node = AstNode::make_while(cond, AstNode::Empty);
         cg.gen_ast(&node, None, None, 0).unwrap();
         let output = output_string(&cg);
@@ -483,8 +483,8 @@ mod tests {
     #[test]
     fn gen_ast_assign_stores_int() {
         let mut cg = new_generator();
-        let id = AstNode::make_lvident("x", DataType::Int);
-        let expr = AstNode::make_intlit(42, DataType::Int);
+        let id = AstNode::make_lvident("x", PrimType::Int);
+        let expr = AstNode::make_intlit(42, PrimType::Int);
         let node = AstNode::make_assign(id, expr);
         cg.gen_ast(&node, None, None, 0).unwrap();
         let output = output_string(&cg);
@@ -495,8 +495,8 @@ mod tests {
     #[test]
     fn gen_ast_assign_stores_char_byte() {
         let mut cg = new_generator();
-        let id = AstNode::make_lvident("c", DataType::Char);
-        let expr = AstNode::make_intlit(7, DataType::Char);
+        let id = AstNode::make_lvident("c", PrimType::Char);
+        let expr = AstNode::make_intlit(7, PrimType::Char);
         let node = AstNode::make_assign(id, expr);
         cg.gen_ast(&node, None, None, 0).unwrap();
         assert!(output_string(&cg).contains("movb"));
@@ -505,8 +505,8 @@ mod tests {
     #[test]
     fn gen_ast_assign_with_expression() {
         let mut cg = new_generator();
-        let sum = AstNode::make_binary(Token::Plus, AstNode::make_intlit(1, DataType::Int), AstNode::make_intlit(2, DataType::Int), DataType::Int);
-        let id = AstNode::make_lvident("x", DataType::Int);
+        let sum = AstNode::make_binary(Token::Plus, AstNode::make_intlit(1, PrimType::Int), AstNode::make_intlit(2, PrimType::Int), PrimType::Int);
+        let id = AstNode::make_lvident("x", PrimType::Int);
         let node = AstNode::make_assign(id, sum);
         cg.gen_ast(&node, None, None, 0).unwrap();
         let output = output_string(&cg);
@@ -520,8 +520,8 @@ mod tests {
     fn gen_function_emits_complete_function() {
         let mut cg = new_generator();
         cg.gen_preamble().unwrap();
-        let name = AstNode::make_ident("main", DataType::Void);
-        let body = AstNode::make_print(AstNode::make_intlit(42, DataType::Int));
+        let name = AstNode::make_ident("main", PrimType::Void);
+        let body = AstNode::make_print(AstNode::make_intlit(42, PrimType::Int));
         let node = AstNode::make_function(name, body);
         cg.gen_ast(&node, None, None, 0).unwrap();
         let output = output_string(&cg);
@@ -533,12 +533,12 @@ mod tests {
     #[test]
     fn gen_function_with_glue_body() {
         let mut cg = new_generator();
-        let name = AstNode::make_ident("myfunc", DataType::Void);
+        let name = AstNode::make_ident("myfunc", PrimType::Void);
         let body = AstNode::make_glue(
-            AstNode::make_global_declaration("x", DataType::Int),
+            AstNode::make_global_declaration("x", PrimType::Int),
             AstNode::make_assign(
-                AstNode::make_lvident("x", DataType::Int),
-                AstNode::make_intlit(99, DataType::Int),
+                AstNode::make_lvident("x", PrimType::Int),
+                AstNode::make_intlit(99, PrimType::Int),
             ),
         );
         let node = AstNode::make_function(name, body);
@@ -562,7 +562,7 @@ mod tests {
     #[test]
     fn gen_freeregs_does_not_panic() {
         let mut cg = new_generator();
-        cg.gen_ast(&AstNode::make_intlit(1, DataType::Int), None, None, 0).unwrap();
+        cg.gen_ast(&AstNode::make_intlit(1, PrimType::Int), None, None, 0).unwrap();
         cg.gen_freeregs().unwrap();
     }
 
@@ -572,16 +572,16 @@ mod tests {
     fn function_with_var_decl_and_assign_and_print() {
         let mut cg = new_generator();
         cg.gen_preamble().unwrap();
-        let name = AstNode::make_ident("main", DataType::Void);
+        let name = AstNode::make_ident("main", PrimType::Void);
         let body = AstNode::make_glue(
             AstNode::make_glue(
-                AstNode::make_global_declaration("x", DataType::Int),
+                AstNode::make_global_declaration("x", PrimType::Int),
                 AstNode::make_assign(
-                    AstNode::make_lvident("x", DataType::Int),
-                    AstNode::make_intlit(100, DataType::Int),
+                    AstNode::make_lvident("x", PrimType::Int),
+                    AstNode::make_intlit(100, PrimType::Int),
                 ),
             ),
-            AstNode::make_print(AstNode::make_ident("x", DataType::Int)),
+            AstNode::make_print(AstNode::make_ident("x", PrimType::Int)),
         );
         let node = AstNode::make_function(name, body);
         cg.gen_ast(&node, None, None, 0).unwrap();

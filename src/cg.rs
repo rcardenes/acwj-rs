@@ -7,7 +7,7 @@ use anyhow::Result;
 use crate::{
     ast::AstNode,
     cgen::CodeBackend,
-    sym::DataType,
+    sym::PrimType,
 };
 
 static PREAMBLE: &str = "
@@ -190,34 +190,34 @@ impl<T> CodeBackend for X86_64Backend<T>
         Ok(reg)
     }
 
-    fn load_glob(&mut self, ident: &str, dtype: DataType) -> Result<Self::Reg> {
+    fn load_glob(&mut self, ident: &str, dtype: PrimType) -> Result<Self::Reg> {
         // Get a new register
         let reg = self.alloc_register();
 
         match dtype {
-            DataType::Int => writeln!(self.output, "\tmovq\t{}(%rip), {}", ident, reg)?,
-            DataType::Char => writeln!(self.output, "\tmovzbq\t{}(%rip), {}", ident, reg)?,
-            DataType::Void => unreachable!("Can't generate load_glob for void types!"),
+            PrimType::Int => writeln!(self.output, "\tmovq\t{}(%rip), {}", ident, reg)?,
+            PrimType::Char => writeln!(self.output, "\tmovzbq\t{}(%rip), {}", ident, reg)?,
+            PrimType::Void => unreachable!("Can't generate load_glob for void types!"),
         }
 
         Ok(reg)
     }
 
-    fn store_glob(&mut self, r: Self::Reg, ident: &str, dtype: DataType) -> Result<Self::Reg> {
+    fn store_glob(&mut self, r: Self::Reg, ident: &str, dtype: PrimType) -> Result<Self::Reg> {
         match dtype {
-            DataType::Int => writeln!(self.output, "\tmovq\t{}, {}(%rip)", r, ident)?,
-            DataType::Char => writeln!(self.output, "\tmovb\t{}, {}(%rip)", r.as_8b(), ident)?,
-            DataType::Void => unreachable!("Can't generate store_glob for void types!"),
+            PrimType::Int => writeln!(self.output, "\tmovq\t{}, {}(%rip)", r, ident)?,
+            PrimType::Char => writeln!(self.output, "\tmovb\t{}, {}(%rip)", r.as_8b(), ident)?,
+            PrimType::Void => unreachable!("Can't generate store_glob for void types!"),
         }
 
         Ok(r)
     }
 
-    fn glob_sym(&mut self, sym: &str, dtype: DataType) -> Result<()> {
+    fn glob_sym(&mut self, sym: &str, dtype: PrimType) -> Result<()> {
         match dtype {
-            DataType::Int => writeln!(self.output, "\t.comm\t{},8,8", sym)?,
-            DataType::Char => writeln!(self.output, "\t.comm\t{},1,1", sym)?,
-            DataType::Void => {}, // Node code generation for void type
+            PrimType::Int => writeln!(self.output, "\t.comm\t{},8,8", sym)?,
+            PrimType::Char => writeln!(self.output, "\t.comm\t{},1,1", sym)?,
+            PrimType::Void => {}, // Node code generation for void type
         }
 
         Ok(())
@@ -306,7 +306,7 @@ mod tests {
     use super::*;
     use rstest::{fixture, rstest};
     use crate::ast::AstNode;
-    use crate::sym::DataType;
+    use crate::sym::PrimType;
     use crate::scan::Token;
 
     type Backend = X86_64Backend<Vec<u8>>;
@@ -434,14 +434,14 @@ mod tests {
 
     #[rstest]
     fn load_glob_int(mut backend: Backend) {
-        backend.load_glob("x", DataType::Int).unwrap();
+        backend.load_glob("x", PrimType::Int).unwrap();
         let output = output_string(&backend);
         assert!(output.contains("movq\tx(%rip),"));
     }
 
     #[rstest]
     fn load_glob_char(mut backend: Backend) {
-        backend.load_glob("c", DataType::Char).unwrap();
+        backend.load_glob("c", PrimType::Char).unwrap();
         let output = output_string(&backend);
         assert!(output.contains("movzbq\tc(%rip),"));
     }
@@ -449,13 +449,13 @@ mod tests {
     #[rstest]
     #[should_panic(expected = "Can't generate load_glob")]
     fn load_glob_void_panics(mut backend: Backend) {
-        let _ = backend.load_glob("v", DataType::Void);
+        let _ = backend.load_glob("v", PrimType::Void);
     }
 
     #[rstest]
     fn store_glob_int(mut backend: Backend) {
         let reg = backend.alloc_register();
-        let ret = backend.store_glob(reg, "x", DataType::Int).unwrap();
+        let ret = backend.store_glob(reg, "x", PrimType::Int).unwrap();
         assert_eq!(ret, reg);
         let output = output_string(&backend);
         assert!(output.contains(&format!("\tmovq\t{}, x(%rip)", reg)));
@@ -464,7 +464,7 @@ mod tests {
     #[rstest]
     fn store_glob_char(mut backend: Backend) {
         let reg = backend.alloc_register();
-        let ret = backend.store_glob(reg, "c", DataType::Char).unwrap();
+        let ret = backend.store_glob(reg, "c", PrimType::Char).unwrap();
         assert_eq!(ret, reg);
         let output = output_string(&backend);
         assert!(output.contains(&format!("\tmovb\t{}, c(%rip)", reg.as_8b())));
@@ -474,26 +474,26 @@ mod tests {
     #[should_panic(expected = "Can't generate store_glob")]
     fn store_glob_void_panics(mut backend: Backend) {
         let reg = backend.alloc_register();
-        let _ = backend.store_glob(reg, "v", DataType::Void);
+        let _ = backend.store_glob(reg, "v", PrimType::Void);
     }
 
     // === Glob symbols ===
 
     #[rstest]
     fn glob_sym_int(mut backend: Backend) {
-        backend.glob_sym("x", DataType::Int).unwrap();
+        backend.glob_sym("x", PrimType::Int).unwrap();
         assert_eq!(output_string(&backend), "\t.comm\tx,8,8\n");
     }
 
     #[rstest]
     fn glob_sym_char(mut backend: Backend) {
-        backend.glob_sym("c", DataType::Char).unwrap();
+        backend.glob_sym("c", PrimType::Char).unwrap();
         assert_eq!(output_string(&backend), "\t.comm\tc,1,1\n");
     }
 
     #[rstest]
     fn glob_sym_void_emits_nothing(mut backend: Backend) {
-        backend.glob_sym("v", DataType::Void).unwrap();
+        backend.glob_sym("v", PrimType::Void).unwrap();
         assert!(output_string(&backend).is_empty());
     }
 
@@ -564,12 +564,12 @@ mod tests {
     #[test]
     fn compare_and_set_all_ops() {
         let cases: [(AstNode, &str); 6] = [
-            (AstNode::make_binary(Token::EQ, AstNode::make_intlit(0, DataType::Int), AstNode::make_intlit(0, DataType::Int), DataType::Int), "sete"),
-            (AstNode::make_binary(Token::NE, AstNode::make_intlit(0, DataType::Int), AstNode::make_intlit(0, DataType::Int), DataType::Int), "setne"),
-            (AstNode::make_binary(Token::LT, AstNode::make_intlit(0, DataType::Int), AstNode::make_intlit(0, DataType::Int), DataType::Int), "setl"),
-            (AstNode::make_binary(Token::GT, AstNode::make_intlit(0, DataType::Int), AstNode::make_intlit(0, DataType::Int), DataType::Int), "setg"),
-            (AstNode::make_binary(Token::LE, AstNode::make_intlit(0, DataType::Int), AstNode::make_intlit(0, DataType::Int), DataType::Int), "setle"),
-            (AstNode::make_binary(Token::GE, AstNode::make_intlit(0, DataType::Int), AstNode::make_intlit(0, DataType::Int), DataType::Int), "setge"),
+            (AstNode::make_binary(Token::EQ, AstNode::make_intlit(0, PrimType::Int), AstNode::make_intlit(0, PrimType::Int), PrimType::Int), "sete"),
+            (AstNode::make_binary(Token::NE, AstNode::make_intlit(0, PrimType::Int), AstNode::make_intlit(0, PrimType::Int), PrimType::Int), "setne"),
+            (AstNode::make_binary(Token::LT, AstNode::make_intlit(0, PrimType::Int), AstNode::make_intlit(0, PrimType::Int), PrimType::Int), "setl"),
+            (AstNode::make_binary(Token::GT, AstNode::make_intlit(0, PrimType::Int), AstNode::make_intlit(0, PrimType::Int), PrimType::Int), "setg"),
+            (AstNode::make_binary(Token::LE, AstNode::make_intlit(0, PrimType::Int), AstNode::make_intlit(0, PrimType::Int), PrimType::Int), "setle"),
+            (AstNode::make_binary(Token::GE, AstNode::make_intlit(0, PrimType::Int), AstNode::make_intlit(0, PrimType::Int), PrimType::Int), "setge"),
         ];
         for (op, expected_set) in &cases {
             let mut backend = backend();
@@ -589,7 +589,7 @@ mod tests {
     fn compare_and_set_frees_r1(mut backend: Backend) {
         let r1 = backend.alloc_register();
         let r2 = backend.alloc_register();
-        let eq = AstNode::make_binary(Token::EQ, AstNode::make_intlit(0, DataType::Int), AstNode::make_intlit(0, DataType::Int), DataType::Int);
+        let eq = AstNode::make_binary(Token::EQ, AstNode::make_intlit(0, PrimType::Int), AstNode::make_intlit(0, PrimType::Int), PrimType::Int);
         backend.compare_and_set(&eq, r1, r2).unwrap();
         assert!(backend.reg_status[&r1]);
     }
@@ -599,12 +599,12 @@ mod tests {
     #[test]
     fn compare_and_jump_all_ops() {
         let cases: [(AstNode, &str); 6] = [
-            (AstNode::make_binary(Token::EQ, AstNode::make_intlit(0, DataType::Int), AstNode::make_intlit(0, DataType::Int), DataType::Int), "jne"),
-            (AstNode::make_binary(Token::NE, AstNode::make_intlit(0, DataType::Int), AstNode::make_intlit(0, DataType::Int), DataType::Int), "je"),
-            (AstNode::make_binary(Token::LT, AstNode::make_intlit(0, DataType::Int), AstNode::make_intlit(0, DataType::Int), DataType::Int), "jge"),
-            (AstNode::make_binary(Token::GT, AstNode::make_intlit(0, DataType::Int), AstNode::make_intlit(0, DataType::Int), DataType::Int), "jle"),
-            (AstNode::make_binary(Token::LE, AstNode::make_intlit(0, DataType::Int), AstNode::make_intlit(0, DataType::Int), DataType::Int), "jg"),
-            (AstNode::make_binary(Token::GE, AstNode::make_intlit(0, DataType::Int), AstNode::make_intlit(0, DataType::Int), DataType::Int), "jl"),
+            (AstNode::make_binary(Token::EQ, AstNode::make_intlit(0, PrimType::Int), AstNode::make_intlit(0, PrimType::Int), PrimType::Int), "jne"),
+            (AstNode::make_binary(Token::NE, AstNode::make_intlit(0, PrimType::Int), AstNode::make_intlit(0, PrimType::Int), PrimType::Int), "je"),
+            (AstNode::make_binary(Token::LT, AstNode::make_intlit(0, PrimType::Int), AstNode::make_intlit(0, PrimType::Int), PrimType::Int), "jge"),
+            (AstNode::make_binary(Token::GT, AstNode::make_intlit(0, PrimType::Int), AstNode::make_intlit(0, PrimType::Int), PrimType::Int), "jle"),
+            (AstNode::make_binary(Token::LE, AstNode::make_intlit(0, PrimType::Int), AstNode::make_intlit(0, PrimType::Int), PrimType::Int), "jg"),
+            (AstNode::make_binary(Token::GE, AstNode::make_intlit(0, PrimType::Int), AstNode::make_intlit(0, PrimType::Int), PrimType::Int), "jl"),
         ];
         for (op, expected_jmp) in &cases {
             let mut backend = backend();
@@ -623,7 +623,7 @@ mod tests {
     fn compare_and_jump_frees_all_regs(mut backend: Backend) {
         let r1 = backend.alloc_register();
         let r2 = backend.alloc_register();
-        let eq = AstNode::make_binary(Token::EQ, AstNode::make_intlit(0, DataType::Int), AstNode::make_intlit(0, DataType::Int), DataType::Int);
+        let eq = AstNode::make_binary(Token::EQ, AstNode::make_intlit(0, PrimType::Int), AstNode::make_intlit(0, PrimType::Int), PrimType::Int);
         backend.compare_and_jump(&eq, r1, r2, 1).unwrap();
         assert!(all_free(&backend));
     }
@@ -644,8 +644,8 @@ mod tests {
 
     #[test]
     fn ast_to_jmp_op_maps_correctly() {
-        let zero = || AstNode::make_intlit(0, DataType::Int);
-        let bin = |t| AstNode::make_binary(t, zero(), zero(), DataType::Int);
+        let zero = || AstNode::make_intlit(0, PrimType::Int);
+        let bin = |t| AstNode::make_binary(t, zero(), zero(), PrimType::Int);
         assert_eq!(ast_to_jmp_op(&bin(Token::EQ)), "jne");
         assert_eq!(ast_to_jmp_op(&bin(Token::NE)), "je");
         assert_eq!(ast_to_jmp_op(&bin(Token::LT)), "jge");
@@ -657,15 +657,15 @@ mod tests {
     #[test]
     #[should_panic(expected = "Not a comparison operator")]
     fn ast_to_jmp_op_panics_on_non_comparison() {
-        ast_to_jmp_op(&AstNode::make_intlit(0, DataType::Int));
+        ast_to_jmp_op(&AstNode::make_intlit(0, PrimType::Int));
     }
 
     // === ast_to_set_op ===
 
     #[test]
     fn ast_to_set_op_maps_correctly() {
-        let zero = || AstNode::make_intlit(0, DataType::Int);
-        let bin = |t| AstNode::make_binary(t, zero(), zero(), DataType::Int);
+        let zero = || AstNode::make_intlit(0, PrimType::Int);
+        let bin = |t| AstNode::make_binary(t, zero(), zero(), PrimType::Int);
         assert_eq!(ast_to_set_op(&bin(Token::EQ)), "sete");
         assert_eq!(ast_to_set_op(&bin(Token::NE)), "setne");
         assert_eq!(ast_to_set_op(&bin(Token::LT)), "setl");
@@ -677,7 +677,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "Not a comparison operator")]
     fn ast_to_set_op_panics_on_non_comparison() {
-        ast_to_set_op(&AstNode::make_intlit(0, DataType::Int));
+        ast_to_set_op(&AstNode::make_intlit(0, PrimType::Int));
     }
 
     // === X86_64Reg formatting ===

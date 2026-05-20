@@ -8,18 +8,18 @@ pub enum StructuralType {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DataType {
+pub enum PrimType {
     Int,
     Char,
     Void,
 }
 
-impl From<Token> for DataType {
+impl From<Token> for PrimType {
     fn from(tok: Token) -> Self {
         match tok {
-            Token::Char => DataType::Char,
-            Token::Int => DataType::Int,
-            Token::Void => DataType::Void,
+            Token::Char => PrimType::Char,
+            Token::Int => PrimType::Int,
+            Token::Void => PrimType::Void,
             // TODO: This needs to provide at least a line number
             _ => panic!("Illegal type, token {}", tok),
         }
@@ -28,7 +28,7 @@ impl From<Token> for DataType {
 
 pub struct SymbolEntry {
     name: String,
-    pub dtype: DataType,
+    pub dtype: PrimType,
     pub stype: StructuralType,
 }
 
@@ -43,7 +43,7 @@ impl SymbolTable {
         }
     }
 
-    pub fn add_glob(&self, name: &str, dtype: DataType, stype: StructuralType) {
+    pub fn add_glob(&self, name: &str, dtype: PrimType, stype: StructuralType) {
         self.globals.borrow_mut().push(SymbolEntry { name: name.into(), dtype, stype });
     }
 
@@ -79,8 +79,8 @@ mod tests {
 #[test]
     fn test_add_glob() {
         let symbols = SymbolTable::new();
-        symbols.add_glob("x", DataType::Int, StructuralType::Variable);
-        symbols.add_glob("y", DataType::Int, StructuralType::Variable);
+        symbols.add_glob("x", PrimType::Int, StructuralType::Variable);
+        symbols.add_glob("y", PrimType::Int, StructuralType::Variable);
 
         assert_eq!(symbols.len(), 2);
         assert!(symbols.has_global("x"));
@@ -90,8 +90,8 @@ mod tests {
 #[test]
     fn test_find_glob_found() {
         let symbols = SymbolTable::new();
-        symbols.add_glob("x", DataType::Int, StructuralType::Variable);
-        symbols.add_glob("y", DataType::Int, StructuralType::Variable);
+        symbols.add_glob("x", PrimType::Int, StructuralType::Variable);
+        symbols.add_glob("y", PrimType::Int, StructuralType::Variable);
 
         let result = symbols.find_glob("x");
         assert!(result.is_some());
@@ -105,8 +105,8 @@ mod tests {
 #[test]
     fn test_find_glob_not_found() {
         let symbols = SymbolTable::new();
-        symbols.add_glob("x", DataType::Int, StructuralType::Variable);
-        symbols.add_glob("y", DataType::Int, StructuralType::Variable);
+        symbols.add_glob("x", PrimType::Int, StructuralType::Variable);
+        symbols.add_glob("y", PrimType::Int, StructuralType::Variable);
 
         let result = symbols.find_glob("z");
         assert!(result.is_none());
