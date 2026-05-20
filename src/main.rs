@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::Parser as ClapParser;
 use acwj_rs::{
     Scanner,
-    cg::X864_64Backend,
+    cg::X86_64Backend,
     cgen::CodeGenerator,
     sym::SymbolTable,
     pars::Parser,
@@ -21,10 +21,10 @@ fn main() -> Result<()> {
     let scanner = Scanner::new(file);
 
     let output = std::fs::File::create(args.output)?;
-    let mut code_gen = CodeGenerator::new(X864_64Backend::new(output));
+    let mut code_gen = CodeGenerator::new(X86_64Backend::new(output));
 
-    let mut symbols = SymbolTable::new();
-    let mut parser = Parser::new(&scanner, &mut symbols);
+    let symbols = SymbolTable::new();
+    let parser = Parser::new(&scanner, &symbols);
     // Generate code and AST on the fly
     // Traverse the AST to generate code
     code_gen.gen_preamble()?;

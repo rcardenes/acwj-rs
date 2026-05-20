@@ -2,13 +2,21 @@ use anyhow::{Result, bail};
 use crate::{
     ast::AstNode,
     scan::{Scanner, Token},
+    sym::{DataType, SymbolTable},
 };
+
+pub enum Compatibility {
+    Incompatible,
+    Compatible(DataType), // Just carry a copy of the compatible type
+    WidenLeft(DataType), // Type to widen to
+    WidenRight(DataType), // Type to widen to
+}
 
 type Precedence = i16;
 
 /// Return numeric precence for the different tokens, so that we
 /// can use it in a Pratt-style parser.
-pub fn op_precedence(line: usize, token: &Token) -> Result<Precedence> {
+fn op_precedence(line: usize, token: &Token) -> Result<Precedence> {
     Ok(match token {
         Token::Plus|Token::Minus => 10,
         Token::Star|Token::Slash => 20,
@@ -20,24 +28,7 @@ pub fn op_precedence(line: usize, token: &Token) -> Result<Precedence> {
     })
 }
 
-pub fn primary<T>(scanner: &Scanner<T>) -> AstNode
-    where T: std::io::Read,
-{
-    // For an INTLIT token, make a leaf AST node for it,
-    // Otherwise, a syntax error for any other token type
-
-    if let Some(token) = scanner.scan() {
-        match &token {
-            Token::IntLit(val) => AstNode::IntLit(*val),
-            Token::Ident(id) => AstNode::make_ident(id),
-            _ => scanner.fatal_extra("Syntax error, token", token)
-        }
-    } else {
-        panic!("EOF reached, expected an integer")
-    }
-}
-
-pub fn is_arithop(token: &Token) -> bool {
+fn is_arithop(token: &Token) -> bool {
     matches!(token, Token::Plus
             |Token::Minus
             |Token::Star
@@ -50,103 +41,219 @@ pub fn is_arithop(token: &Token) -> bool {
             |Token::GE)
 }
 
-// Return an AST tree whose root is a binary operator.
-// ptp is the precedence of the previous token
-pub fn binexpr<T>(scanner: &Scanner<T>, ptp: Precedence) -> Result<AstNode>
+// Return if two primitive types are compatible.
+// If only_right is true, then widening can happen only left to right
+pub fn is_type_compatible(left: DataType, right: DataType, only_right: bool) -> Compatibility {
+    match (left, right) {
+        // Voids are not compatible with anything
+        (DataType::Void, _) | (_, DataType::Void) => Compatibility::Incompatible,
+        // Any other type is compatible with itself
+        (x, y) if x == y => Compatibility::Compatible(x),
+        // Widen Char to Int is required
+        (DataType::Char, DataType::Int) => Compatibility::WidenLeft(DataType::Int),
+        (DataType::Int, DataType::Char) => if only_right {
+            Compatibility::Incompatible
+        } else {
+            Compatibility::WidenRight(DataType::Int)
+        },
+        // Anything else is compatible
+        _ => unimplemented!(),
+    }
+}
+
+pub struct ExpressionGenerator<'a, T> {
+    scanner: &'a Scanner<T>,
+    sym_table: &'a SymbolTable,
+}
+
+impl<'a, T> ExpressionGenerator<'a, T>
     where T: std::io::Read,
 {
-    let mut left = primary(scanner);
-
-    while let Some(token) = scanner.scan() {
-        if !is_arithop(&token) {
-            scanner.putback_token(token);
-            break;
-        }
-
-        let curr_prec = op_precedence(scanner.get_line(), &token)?;
-        if curr_prec <= ptp {
-            scanner.putback_token(token);
-            break;
-        }
-
-        let right = binexpr(scanner, curr_prec)?;
-
-        left = match token {
-            Token::Plus|Token::Minus|Token::Star|Token::Slash|Token::EQ|Token::NE|Token::LT|Token::LE|Token::GT|Token::GE => {
-                AstNode::make_binary(token, left, right)
-            }
-            _ => unreachable!("This shouldn't be reachable after we tested the op to be arithmetic")
-        };
+    pub fn new(scanner: &'a Scanner<T>, sym_table: &'a SymbolTable) -> Self {
+        ExpressionGenerator { scanner, sym_table }
     }
 
-    Ok(left)
+    pub fn primary(&self) -> AstNode
+    {
+        // For an INTLIT token, make a leaf AST node for it,
+        // Otherwise, a syntax error for any other token type
+
+        if let Some(token) = self.scanner.scan() {
+            match &token {
+                // For an IntLit token, make it a Char if it is within that type's range,
+                // so that we don't have to narrow it later if needed. Widen the data is
+                // always possible.
+                Token::IntLit(val) => if *val >= 0 && *val < 256 {
+                    AstNode::make_intlit(*val, DataType::Char)
+                } else {
+                    AstNode::make_intlit(*val, DataType::Int)
+                },
+                Token::Ident(id) => {
+                    if let Some(found) = self.sym_table.find_glob(id) {
+                        AstNode::make_ident(id, found.dtype)
+                    } else {
+                        self.scanner.fatal_extra("Unknown variable", id)
+                    }
+                },
+                _ => self.scanner.fatal_extra("Syntax error, token", token)
+            }
+        } else {
+            panic!("EOF reached, expected an integer")
+        }
+    }
+
+    // Return an AST tree whose root is a binary operator.
+    // ptp is the precedence of the previous token
+    pub fn binexpr(&self, ptp: Precedence) -> Result<AstNode>
+        where T: std::io::Read,
+    {
+        let mut left = self.primary();
+
+        while let Some(token) = self.scanner.scan() {
+            if !is_arithop(&token) {
+                self.scanner.putback_token(token);
+                break;
+            }
+
+            let curr_prec = op_precedence(self.scanner.get_line(), &token)?;
+            if curr_prec <= ptp {
+                self.scanner.putback_token(token);
+                break;
+            }
+
+            let mut right = self.binexpr(curr_prec)?;
+            let compat = if let (Some(left_type), Some(right_type)) = (left.get_type(), right.get_type()) {
+                is_type_compatible(left_type, right_type, false)
+            } else {
+                Compatibility::Incompatible
+            };
+
+            let bin_type = match compat {
+                Compatibility::Incompatible => self.scanner.fatal("Incompatible types"),
+                Compatibility::WidenLeft(t) => {
+                    // Widen the left branch
+                    left = left.new_type(t);
+                    t
+                },
+                Compatibility::WidenRight(t) => {
+                    // Widen the right branch
+                    right = right.new_type(t);
+                    t
+                },
+                Compatibility::Compatible(t) => t, // Do nothing for full compatibility
+            };
+
+            left = match token {
+                Token::Plus|Token::Minus|Token::Star|Token::Slash|Token::EQ|Token::NE|Token::LT|Token::LE|Token::GT|Token::GE => {
+                    AstNode::make_binary(token, left, right, bin_type)
+                }
+                _ => unreachable!("This shouldn't be reachable after we tested the op to be arithmetic")
+            };
+        }
+
+        Ok(left)
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use rstest::{fixture, rstest};
     use std::io::Cursor;
     use super::*;
-    use crate::scan::Token;
 
     fn scanner_from(s: &str) -> Scanner<Cursor<Vec<u8>>> {
         Scanner::new(Cursor::new(s.as_bytes().to_vec()))
     }
 
+    type TestInput = Cursor<Vec<u8>>;
+
+    struct TestFramework
+    {
+        scanner: Scanner<TestInput>,
+        sym_table: SymbolTable,
+    }
+
+    impl TestFramework {
+        fn new(s: &str) -> Self {
+            let scanner = Scanner::new(Cursor::new(s.as_bytes().to_vec()));
+            let sym_table = SymbolTable::new();
+
+            TestFramework { 
+                scanner,
+                sym_table,
+            }
+        }
+
+        fn primary(&self) -> AstNode {
+            ExpressionGenerator::new(&self.scanner, &self.sym_table).primary()
+        }
+
+        fn binexpr(&self, ptp: Precedence) -> Result<AstNode> {
+            ExpressionGenerator::new(&self.scanner, &self.sym_table).binexpr(ptp)
+        }
+    }
+
+    #[fixture]
+    fn testfr(#[default("")] text: &str) -> TestFramework {
+        TestFramework::new(text)
+    }
+
+
     // --- primary ---
 
-    #[test]
-    fn primary_intlit_returns_leaf_node() {
-        let scanner = scanner_from("42");
-        let node = primary(&scanner);
-        assert_eq!(node, AstNode::IntLit(42));
+    #[rstest]
+    fn primary_intlit_returns_leaf_node(#[with("42")] testfr: TestFramework) {
+        let node = testfr.primary();
+        assert_eq!(node, AstNode::make_intlit(42, DataType::Char));
     }
 
-    #[test]
-    fn primary_ident_returns_leaf_node() {
-        let scanner = scanner_from("x");
-        let node = primary(&scanner);
-        assert_eq!(node, AstNode::make_ident("x"));
+    #[rstest]
+    fn primary_intlit_in_char_range(#[with("255")] testfr: TestFramework) {
+        let node = testfr.primary();
+        assert_eq!(node, AstNode::make_intlit(255, DataType::Char));
     }
 
-    #[test]
+    #[rstest]
     #[should_panic]
-    fn primary_panics_on_operator_token() {
-        let scanner = scanner_from("+");
-        primary(&scanner);
+    fn primary_panics_on_operator_token(#[with("+")] testfr: TestFramework) {
+        testfr.primary();
     }
 
-    #[test]
+    #[rstest]
     #[should_panic]
-    fn primary_panics_at_eof() {
-        let scanner = scanner_from("");
-        primary(&scanner);
+    fn primary_panics_at_eof(#[with("")] testfr: TestFramework) {
+        testfr.primary();
     }
 
     // --- binexpr ---
 
-    #[test]
-    fn binexpr_single_integer_returns_intlit_root() {
-        let scanner = scanner_from("7");
-        let tree = binexpr(&scanner, 0).expect("Expected a clean parsing");
-        assert_eq!(tree, AstNode::IntLit(7));
+    #[rstest]
+    fn binexpr_single_integer_returns_intlit_root(#[with("7")] testfr: TestFramework) {
+        let tree = testfr.binexpr(0).expect("Expected a clean parsing");
+        assert_eq!(tree, AstNode::make_intlit(7, DataType::Char));
     }
 
-    #[test]
-    fn binexpr_addition_builds_correct_tree() {
-        let scanner = scanner_from("3 + 5");
-        let tree = binexpr(&scanner, 0).expect("Expected a clean parsing");
-        assert_eq!(tree, AstNode::make_binary(Token::Plus, AstNode::IntLit(3), AstNode::IntLit(5)));
+    #[rstest]
+    fn binexpr_addition_builds_correct_tree(#[with("3 + 5")] testfr: TestFramework) {
+        let tree = testfr.binexpr(0).expect("Expected a clean parsing");
+        assert_eq!(tree, AstNode::make_binary(Token::Plus,
+                                              AstNode::make_intlit(3, DataType::Char),
+                                              AstNode::make_intlit(5, DataType::Char),
+                                              DataType::Char));
     }
 
-    #[test]
-    fn binexpr_equal_precedence_is_left_associative() {
-        // "2 - 3 + 5" parses as Add(Subtract(2, 3), 5): last op is root, left subtree holds earlier ops
-        let scanner = scanner_from("2 - 3 + 5");
-        let tree = binexpr(&scanner, 0).expect("Expected a clean parsing");
+    #[rstest]
+    // "2 - 3 + 5" parses as Add(Subtract(2, 3), 5): last op is root, left subtree holds earlier ops
+    fn binexpr_equal_precedence_is_left_associative(#[with("2 - 3 + 5")] testfr: TestFramework) {
+        let tree = testfr.binexpr(0).expect("Expected a clean parsing");
         assert_eq!(tree,
             AstNode::make_binary(Token::Plus,
-                AstNode::make_binary(Token::Minus, AstNode::IntLit(2), AstNode::IntLit(3)),
-                AstNode::IntLit(5)));
+                AstNode::make_binary(Token::Minus,
+                                     AstNode::make_intlit(2, DataType::Char),
+                                     AstNode::make_intlit(3, DataType::Char),
+                                     DataType::Char),
+                AstNode::make_intlit(5, DataType::Char),
+                DataType::Char));
     }
 
     // --- op_precedence ---
@@ -192,11 +299,13 @@ mod tests {
 
     // --- binexpr with comparisons ---
 
-    #[test]
-    fn binexpr_equality_comparison_builds_equal_root() {
-        let scanner = scanner_from("3 == 5");
-        let tree = binexpr(&scanner, 0).expect("Expected a clean parsing");
+    #[rstest]
+    fn binexpr_equality_comparison_builds_equal_root(#[with("3 == 5")] testfr: TestFramework) {
+        let tree = testfr.binexpr(0).expect("Expected a clean parsing");
 
-        assert_eq!(tree, AstNode::make_binary(Token::EQ, AstNode::IntLit(3), AstNode::IntLit(5)));
+        assert_eq!(tree, AstNode::make_binary(Token::EQ,
+                                              AstNode::make_intlit(3, DataType::Char),
+                                              AstNode::make_intlit(5, DataType::Char),
+                                              DataType::Char));
     }
 }

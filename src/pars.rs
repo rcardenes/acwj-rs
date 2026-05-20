@@ -1,71 +1,34 @@
 use anyhow::{Result, bail};
 use crate::{
     ast::AstNode,
-    expr::binexpr,
+    expr::{Compatibility, ExpressionGenerator, is_type_compatible},
     scan::{Scanner, Token},
-    sym::SymbolTable,
+    sym::{DataType, StructuralType, SymbolTable},
 };
-
-/* Grammar
- *  compound_statement: '{' '}'          // empty, i.e. no statement
- *      |      '{' statement '}'
- *      |      '{' statement statements '}'
- *      ;
- *
- * statement: print_statement
- *      |     declaration
- *      |     assignment_statement
- *      |     if_statement
- *      |     while_statement
- *      |     for_statement
- *      ;
- *
- * print_statement: 'print' expression ';'  ;
- *
- * declaration: 'int' identifier ';'  ;
- *
- * assignment_statement: identifier '=' expression ';'   ;
- *
- * if_statement: if_head
- *      |        if_head 'else' compound_statement
- *      ;
- *
- * if_head: 'if' '(' true_false_expression ')' compound_statement  ;
- *
- * while_statement: 'while' '(' true_false_expression ')' compound_statement  ;
- *
- * for_statement: 'for' '(' preop_statement ';'
- *                          true_false_expression ';'
- *                          postop_statement ')' compound_statement  ;
- *
- * preop_statement:  statement  ;        (for now)
- * postop_statement: statement  ;        (for now)
- *
- * function_declaration: 'void' identifier '(' ')' compound_statement   ;
- *
- * identifier: T_IDENT ;
- */
 
 pub struct Parser<'a, T>
     where T: std::io::Read,
 
 {
     scanner: &'a Scanner<T>,
-    symbols: &'a mut SymbolTable,
+    symbols: &'a SymbolTable,
+    expr: ExpressionGenerator<'a, T>,
 }
 
 impl<'a, T> Parser<'a, T>
 where T: std::io::Read,
 {
-    pub fn new(scanner: &'a Scanner<T>, symbols: &'a mut SymbolTable) -> Self {
+    pub fn new(scanner: &'a Scanner<T>, symbols: &'a SymbolTable) -> Self {
+        let expr = ExpressionGenerator::new(scanner, symbols);
         Parser {
             scanner,
             symbols,
+            expr,
         }
     }
 
     fn condition(&self) -> Result<AstNode> {
-        let tree = binexpr(self.scanner, 0)?;
+        let tree = self.expr.binexpr(0)?;
 
         // Temporarily limit the boolean conditions to comparisons
         if !tree.is_comparison() {
@@ -75,24 +38,44 @@ where T: std::io::Read,
         Ok(tree)
     }
 
-    fn print_statement(&mut self) -> Result<AstNode> {
-        Ok(AstNode::make_print(binexpr(self.scanner, 0)?))
+    fn print_statement(&self) -> Result<AstNode> {
+        let tree = self.expr.binexpr(0)?;
+        let tree_type = tree.get_type()
+                                      .unwrap_or_else(|| self.scanner.fatal("Binary expression without a type!"));
+        let tree = match is_type_compatible(DataType::Int, tree_type, false) {
+            Compatibility::Incompatible => self.scanner.fatal("Incompatible types!"),
+            Compatibility::Compatible(_) | Compatibility::WidenLeft(_) => tree,
+            Compatibility::WidenRight(t) => tree.new_type(t),
+
+        };
+        Ok(AstNode::make_print(tree))
     }
 
-    fn var_declaration(&mut self, _type_token: Token) -> Result<AstNode> {
+    fn var_declaration(&self, type_token: Token) -> Result<AstNode> {
+        let dtype = DataType::from(type_token);
         let ident = self.scanner.ident();
 
-        self.symbols.add_glob(&ident);
+        self.symbols.add_glob(&ident, dtype, StructuralType::Variable);
         // self.code_gen.gen_globsym(&ident)?;
 
-        Ok(AstNode::make_global_declaration(&ident))
+        Ok(AstNode::make_global_declaration(&ident, dtype))
     }
 
-    fn assignment_statement(&mut self, ident: String) -> Result<AstNode> {
-        if self.symbols.find_glob(&ident).is_some() {
-            let id = AstNode::make_lvident(&ident);
+    fn assignment_statement(&self, ident: String) -> Result<AstNode> {
+        if let Some(sym) = self.symbols.find_glob(&ident) {
+            let id = AstNode::make_lvident(&ident, sym.dtype);
             self.scanner.matches(Token::Assign, "=");
-            let expr = binexpr(self.scanner, -1)?;
+            let expr = self.expr.binexpr(-1)?;
+
+            let ltype = expr.get_type()
+                                      .unwrap_or_else(|| self.scanner.fatal("Binary expression without a type!"));
+
+            let expr = match is_type_compatible(ltype, sym.dtype, true) {
+                Compatibility::Incompatible => self.scanner.fatal("Incompatible types!"),
+                Compatibility::Compatible(_) => expr,
+                Compatibility::WidenLeft(t) => expr.new_type(t),
+                Compatibility::WidenRight(_) => unreachable!("Illegal to widen an lvalue")
+            };
 
 
             // let _ = self.code_gen.gen_ast(&tree, None, None)?;
@@ -103,7 +86,7 @@ where T: std::io::Read,
         }
     }
 
-    fn if_statement(&mut self) -> Result<AstNode> {
+    fn if_statement(&self) -> Result<AstNode> {
         self.scanner.lparen();
         let condition = self.condition()?;
         self.scanner.rparen();
@@ -119,7 +102,7 @@ where T: std::io::Read,
         Ok(AstNode::make_if(condition, true_branch, false_branch))
     }
 
-    fn while_statement(&mut self) -> Result<AstNode> {
+    fn while_statement(&self) -> Result<AstNode> {
         self.scanner.lparen();
         let condition = self.condition()?;
         self.scanner.rparen();
@@ -129,7 +112,7 @@ where T: std::io::Read,
         Ok(AstNode::make_while(condition, body))
     }
 
-    fn for_statement(&mut self) -> Result<AstNode> {
+    fn for_statement(&self) -> Result<AstNode> {
         // No need for new grammar elements or code generation to
         // represent the "for" loop. Instead we'll treat it as syntactic
         // sugar for:
@@ -161,15 +144,15 @@ where T: std::io::Read,
                     AstNode::make_glue(body, post_op))))
     }
 
-    pub fn function_declaration(&mut self) -> Result<Option<AstNode>> {
+    pub fn function_declaration(&self) -> Result<Option<AstNode>> {
         if let Some(t) = self.scanner.scan() {
             if t != Token::Void {
                 bail!("Expected function declaration, found {}", t);
             }
 
             let ident = self.scanner.ident();
-            let name = AstNode::make_ident(&ident);
-            self.symbols.add_glob(&ident);
+            let name = AstNode::make_ident(&ident, DataType::Void);
+            self.symbols.add_glob(&ident, DataType::Void, StructuralType::Function);
             self.scanner.lparen();
             self.scanner.rparen();
             let body = self.compound_statement()?;
@@ -180,10 +163,11 @@ where T: std::io::Read,
 
     }
 
-    pub fn single_statement(&mut self) -> Result<AstNode> {
+    pub fn single_statement(&self) -> Result<AstNode> {
         match self.scanner.scan() {
             Some(Token::Print) => self.print_statement(),
-            Some(t @ Token::Int) => self.var_declaration(t),
+            Some(t @ Token::Int
+                |t @ Token::Char) => self.var_declaration(t),
             Some(Token::Ident(id)) => self.assignment_statement(id),
             Some(Token::If) => self.if_statement(),
             Some(Token::For) => self.for_statement(),
@@ -219,7 +203,7 @@ where T: std::io::Read,
         }
     }
 
-    pub fn compound_statement(&mut self) -> Result<AstNode> {
+    pub fn compound_statement(&self) -> Result<AstNode> {
         self.scanner.lbrace();
 
         let mut left = AstNode::Empty;
@@ -264,57 +248,57 @@ mod tests {
 
     #[test]
     fn compound_statement_empty_body() {
-        let (scanner, mut symbols) = parser_from("{}");
-        let mut parser = Parser::new(&scanner, &mut symbols);
+        let (scanner, symbols) = parser_from("{}");
+        let parser = Parser::new(&scanner, &symbols);
         let tree = parser.compound_statement().expect("parse failed");
         assert_eq!(tree, AstNode::Empty);
     }
 
     #[test]
     fn compound_statement_var_declaration() {
-        let (scanner, mut symbols) = parser_from("{ int x; }");
-        let mut parser = Parser::new(&scanner, &mut symbols);
+        let (scanner, symbols) = parser_from("{ int x; }");
+        let parser = Parser::new(&scanner, &symbols);
         let tree = parser.compound_statement().expect("parse failed");
-        assert_eq!(tree, AstNode::GlobalDec { id: Identifier::new("x") });
+        assert_eq!(tree, AstNode::GlobalDec { id: Identifier::new("x"), dtype: DataType::Int });
     }
 
     #[test]
     fn compound_statement_print() {
-        let (scanner, mut symbols) = parser_from("{ print 42; }");
-        let mut parser = Parser::new(&scanner, &mut symbols);
+        let (scanner, symbols) = parser_from("{ print 42; }");
+        let parser = Parser::new(&scanner, &symbols);
         let tree = parser.compound_statement().expect("parse failed");
-        assert_eq!(tree, AstNode::make_print(AstNode::IntLit(42)));
+        assert_eq!(tree, AstNode::make_print(AstNode::make_intlit(42, DataType::Int)));
     }
 
     #[test]
     fn compound_statement_multiple_statements() {
-        let (scanner, mut symbols) = parser_from("{ print 1; print 2; }");
-        let mut parser = Parser::new(&scanner, &mut symbols);
+        let (scanner, symbols) = parser_from("{ print 1; print 2; }");
+        let parser = Parser::new(&scanner, &symbols);
         let tree = parser.compound_statement().expect("parse failed");
         assert_eq!(tree, AstNode::make_glue(
-            AstNode::make_print(AstNode::IntLit(1)),
-            AstNode::make_print(AstNode::IntLit(2)),
+            AstNode::make_print(AstNode::make_intlit(1, DataType::Int)),
+            AstNode::make_print(AstNode::make_intlit(2, DataType::Int)),
         ));
     }
 
     #[test]
     fn compound_statement_skips_standalone_semicolons() {
-        let (scanner, mut symbols) = parser_from("{ ; ; print 42; }");
-        let mut parser = Parser::new(&scanner, &mut symbols);
+        let (scanner, symbols) = parser_from("{ ; ; print 42; }");
+        let parser = Parser::new(&scanner, &symbols);
         let tree = parser.compound_statement().expect("parse failed");
-        assert_eq!(tree, AstNode::make_print(AstNode::IntLit(42)));
+        assert_eq!(tree, AstNode::make_print(AstNode::make_intlit(42, DataType::Int)));
     }
 
     #[test]
     fn compound_statement_assignment() {
-        let (scanner, mut symbols) = parser_from("{ int x; x = 5; }");
-        let mut parser = Parser::new(&scanner, &mut symbols);
+        let (scanner, symbols) = parser_from("{ int x; x = 5; }");
+        let parser = Parser::new(&scanner, &symbols);
         let tree = parser.compound_statement().expect("parse failed");
         assert_eq!(tree, AstNode::make_glue(
-            AstNode::GlobalDec { id: Identifier::new("x") },
+            AstNode::make_global_declaration("x",  DataType::Int),
             AstNode::make_assign(
-                AstNode::make_lvident("x"),
-                AstNode::IntLit(5),
+                AstNode::make_lvident("x", DataType::Int),
+                AstNode::make_intlit(5, DataType::Int),
             ),
         ));
     }
@@ -322,63 +306,63 @@ mod tests {
     #[test]
     #[should_panic(expected = "Undeclared variable")]
     fn compound_statement_undeclared_var_panics() {
-        let (scanner, mut symbols) = parser_from("{ x = 5; }");
-        let mut parser = Parser::new(&scanner, &mut symbols);
+        let (scanner, symbols) = parser_from("{ x = 5; }");
+        let parser = Parser::new(&scanner, &symbols);
         let _ = parser.compound_statement();
     }
 
     #[test]
     fn compound_statement_if_without_else() {
-        let (scanner, mut symbols) = parser_from("{ if (1 < 2) { print 42; } }");
-        let mut parser = Parser::new(&scanner, &mut symbols);
+        let (scanner, symbols) = parser_from("{ if (1 < 2) { print 42; } }");
+        let parser = Parser::new(&scanner, &symbols);
         let tree = parser.compound_statement().expect("parse failed");
         assert_eq!(tree, AstNode::make_if(
-            AstNode::make_binary(Token::LT, AstNode::IntLit(1), AstNode::IntLit(2)),
-            AstNode::make_print(AstNode::IntLit(42)),
+            AstNode::make_binary(Token::LT, AstNode::make_intlit(1, DataType::Char), AstNode::make_intlit(2, DataType::Char), DataType::Char),
+            AstNode::make_print(AstNode::make_intlit(42, DataType::Int)),
             None,
         ));
     }
 
     #[test]
     fn compound_statement_if_with_else() {
-        let (scanner, mut symbols) = parser_from(
+        let (scanner, symbols) = parser_from(
             "{ if (1 < 2) { print 1; } else { print 2; } }"
         );
-        let mut parser = Parser::new(&scanner, &mut symbols);
+        let parser = Parser::new(&scanner, &symbols);
         let tree = parser.compound_statement().expect("parse failed");
         assert_eq!(tree, AstNode::make_if(
-            AstNode::make_binary(Token::LT, AstNode::IntLit(1), AstNode::IntLit(2)),
-            AstNode::make_print(AstNode::IntLit(1)),
-            Some(AstNode::make_print(AstNode::IntLit(2))),
+            AstNode::make_binary(Token::LT, AstNode::make_intlit(1, DataType::Char), AstNode::make_intlit(2, DataType::Char), DataType::Char),
+            AstNode::make_print(AstNode::make_intlit(1, DataType::Int)),
+            Some(AstNode::make_print(AstNode::make_intlit(2, DataType::Int))),
         ));
     }
 
     #[test]
     fn compound_statement_while() {
-        let (scanner, mut symbols) = parser_from("{ while (1 < 2) { print 42; } }");
-        let mut parser = Parser::new(&scanner, &mut symbols);
+        let (scanner, symbols) = parser_from("{ while (1 < 2) { print 42; } }");
+        let parser = Parser::new(&scanner, &symbols);
         let tree = parser.compound_statement().expect("parse failed");
         assert_eq!(tree, AstNode::make_while(
-            AstNode::make_binary(Token::LT, AstNode::IntLit(1), AstNode::IntLit(2)),
-            AstNode::make_print(AstNode::IntLit(42)),
+            AstNode::make_binary(Token::LT, AstNode::make_intlit(1, DataType::Char), AstNode::make_intlit(2, DataType::Char), DataType::Char),
+            AstNode::make_print(AstNode::make_intlit(42, DataType::Int)),
         ));
     }
 
     #[test]
     fn compound_statement_for_desugars_to_glue_while() {
         // for (pre; cond; post) { body } becomes Glue(pre, While(cond, Glue(body, post)))
-        let (scanner, mut symbols) = parser_from(
+        let (scanner, symbols) = parser_from(
             "{ for (print 1; 1 < 2; print 3) { print 42; } }"
         );
-        let mut parser = Parser::new(&scanner, &mut symbols);
+        let parser = Parser::new(&scanner, &symbols);
         let tree = parser.compound_statement().expect("parse failed");
         assert_eq!(tree, AstNode::make_glue(
-            AstNode::make_print(AstNode::IntLit(1)),
+            AstNode::make_print(AstNode::make_intlit(1, DataType::Int)),
             AstNode::make_while(
-                AstNode::make_binary(Token::LT, AstNode::IntLit(1), AstNode::IntLit(2)),
+                AstNode::make_binary(Token::LT, AstNode::make_intlit(1, DataType::Char), AstNode::make_intlit(2, DataType::Char), DataType::Char),
                 AstNode::make_glue(
-                    AstNode::make_print(AstNode::IntLit(42)),
-                    AstNode::make_print(AstNode::IntLit(3)),
+                    AstNode::make_print(AstNode::make_intlit(42, DataType::Int)),
+                    AstNode::make_print(AstNode::make_intlit(3, DataType::Int)),
                 ),
             ),
         ));
@@ -386,67 +370,67 @@ mod tests {
 
     #[test]
     fn function_declaration_empty_body() {
-        let (scanner, mut symbols) = parser_from("void foo() {}");
-        let mut parser = Parser::new(&scanner, &mut symbols);
+        let (scanner, symbols) = parser_from("void foo() {}");
+        let parser = Parser::new(&scanner, &symbols);
         let result = parser.function_declaration().expect("parse failed");
         assert_eq!(result, Some(AstNode::make_function(
-            AstNode::make_ident("foo"),
+            AstNode::make_ident("foo", DataType::Void),
             AstNode::Empty,
         )));
     }
 
     #[test]
     fn function_declaration_eof_returns_none() {
-        let (scanner, mut symbols) = parser_from("");
-        let mut parser = Parser::new(&scanner, &mut symbols);
+        let (scanner, symbols) = parser_from("");
+        let parser = Parser::new(&scanner, &symbols);
         let result = parser.function_declaration().expect("parse failed");
         assert_eq!(result, None);
     }
 
     #[test]
     fn function_declaration_non_void_fails() {
-        let (scanner, mut symbols) = parser_from("int foo() {}");
-        let mut parser = Parser::new(&scanner, &mut symbols);
+        let (scanner, symbols) = parser_from("int foo() {}");
+        let parser = Parser::new(&scanner, &symbols);
         assert!(parser.function_declaration().is_err());
     }
 
     #[test]
     fn single_statement_operator_fails() {
-        let (scanner, mut symbols) = parser_from("+ 5");
-        let mut parser = Parser::new(&scanner, &mut symbols);
+        let (scanner, symbols) = parser_from("+ 5");
+        let parser = Parser::new(&scanner, &symbols);
         assert!(parser.single_statement().is_err());
     }
 
     #[test]
     fn single_statement_intlit_fails() {
-        let (scanner, mut symbols) = parser_from("42");
-        let mut parser = Parser::new(&scanner, &mut symbols);
+        let (scanner, symbols) = parser_from("42");
+        let parser = Parser::new(&scanner, &symbols);
         assert!(parser.single_statement().is_err());
     }
 
     #[test]
     #[should_panic]
     fn single_statement_rbrace_panics() {
-        let (scanner, mut symbols) = parser_from("}");
-        let mut parser = Parser::new(&scanner, &mut symbols);
+        let (scanner, symbols) = parser_from("}");
+        let parser = Parser::new(&scanner, &symbols);
         let _ = parser.single_statement();
     }
 
     #[test]
     #[should_panic]
     fn single_statement_eof_panics() {
-        let (scanner, mut symbols) = parser_from("");
-        let mut parser = Parser::new(&scanner, &mut symbols);
+        let (scanner, symbols) = parser_from("");
+        let parser = Parser::new(&scanner, &symbols);
         let _ = parser.single_statement();
     }
 
     #[test]
     #[should_panic]
     fn condition_bad_comparison_panics() {
-        let (scanner, mut symbols) = parser_from(
+        let (scanner, symbols) = parser_from(
             "{ int x; if (x) { print x; } }"
         );
-        let mut parser = Parser::new(&scanner, &mut symbols);
+        let parser = Parser::new(&scanner, &symbols);
         let _ = parser.compound_statement();
     }
 }

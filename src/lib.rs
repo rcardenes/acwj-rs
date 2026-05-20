@@ -7,4 +7,3 @@ pub mod pars;
 pub mod sym;
 
 pub use scan::{Scanner, Token};
-pub use expr::binexpr;

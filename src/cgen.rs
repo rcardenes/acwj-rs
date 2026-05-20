@@ -1,7 +1,10 @@
 // Given an AST, generate code recursively
 
 use anyhow::Result;
-use crate::ast::{AstNode, Identifier};
+use crate::{
+    ast::{AstNode, Identifier},
+    sym::DataType,
+};
 
 pub trait CodeBackend {
     type Reg: Copy;
@@ -11,9 +14,9 @@ pub trait CodeBackend {
     fn func_postamble(&mut self) -> Result<()>;
     fn func_preamble(&mut self, ident: &str) -> Result<()>;
     fn load_int(&mut self, val: i64) -> Result<Self::Reg>;
-    fn load_glob(&mut self, ident: &str) -> Result<Self::Reg>;
-    fn store_glob(&mut self, r: Self::Reg, ident: &str) -> Result<Self::Reg>;
-    fn glob_sym(&mut self, sym: &str) -> Result<()>;
+    fn load_glob(&mut self, ident: &str, dtype: DataType) -> Result<Self::Reg>;
+    fn store_glob(&mut self, r: Self::Reg, ident: &str, dtype: DataType) -> Result<Self::Reg>;
+    fn glob_sym(&mut self, sym: &str, dtype: DataType) -> Result<()>;
     fn add(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Option<Self::Reg>>;
     fn sub(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Option<Self::Reg>>;
     fn mul(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Option<Self::Reg>>;
@@ -149,7 +152,7 @@ where
     pub fn gen_function(&mut self, tree: &AstNode) -> Result<Option<B::Reg>> {
         if let AstNode::Function { name, body } = tree {
             match &**name {
-                AstNode::Ident(id) => {
+                AstNode::Ident { id,  .. } => {
                     self.backend.func_preamble(&id.name)?;
                 },
                 _ => unreachable!("Function with invalid id: {:?}", name)
@@ -171,14 +174,14 @@ where
             AstNode::While {..} => self.gen_while(tree),
             AstNode::Print {..} => self.gen_print(tree),
             AstNode::Glue {..} => self.gen_glue_ast(tree),
-            AstNode::Add { left, right } => self.binary(tree, left, right, |cg, r1, r2| cg.add(r1, r2)),
-            AstNode::Subtract { left, right } => self.binary(tree, left, right, |cg, r1, r2| cg.sub(r1, r2)),
-            AstNode::Multiply { left, right } => self.binary(tree, left, right, |cg, r1, r2| cg.mul(r1, r2)),
-            AstNode::Divide { left, right } => self.binary(tree, left, right, |cg, r1, r2| cg.div(r1, r2)),
-            AstNode::Equal { left, right }|AstNode::NotEqual { left, right }
-                |AstNode::LessThan { left, right }|AstNode::GreaterThan { left, right }
-                |AstNode::LessThanOrEqual { left, right }
-                |AstNode::GreaterThanOrEqual { left, right } => {
+            AstNode::Add { left, right, .. } => self.binary(tree, left, right, |cg, r1, r2| cg.add(r1, r2)),
+            AstNode::Subtract { left, right, .. } => self.binary(tree, left, right, |cg, r1, r2| cg.sub(r1, r2)),
+            AstNode::Multiply { left, right, .. } => self.binary(tree, left, right, |cg, r1, r2| cg.mul(r1, r2)),
+            AstNode::Divide { left, right, .. } => self.binary(tree, left, right, |cg, r1, r2| cg.div(r1, r2)),
+            AstNode::Equal { left, right, .. }|AstNode::NotEqual { left, right, .. }
+                |AstNode::LessThan { left, right, .. }|AstNode::GreaterThan { left, right, .. }
+                |AstNode::LessThanOrEqual { left, right, .. }
+                |AstNode::GreaterThanOrEqual { left, right, .. } => {
                     if parent_op.is_some_and(AstNode::is_branching_stmt) {
                         self.binary(tree, left, right,
                             |cg: &mut B, r1, r2| cg.compare_and_jump(tree, r1, r2, label))
@@ -187,14 +190,14 @@ where
                             |cg: &mut B, r1, r2| cg.compare_and_set(tree, r1, r2))
                     }
                 },
-            AstNode::IntLit(val) => self.backend.load_int(*val).map(Some),
-            AstNode::Ident(Identifier { name }) => self.backend.load_glob(&name).map(Some),
-            AstNode::LvIdent(Identifier { name }) => self.backend.store_glob(r.unwrap(), &name).map(Some),
+            AstNode::IntLit { val, .. } => self.backend.load_int(*val).map(Some),
+            AstNode::Ident{ id: Identifier { name }, dtype } => self.backend.load_glob(name, *dtype).map(Some),
+            AstNode::LvIdent{ id: Identifier { name }, dtype } => self.backend.store_glob(r.unwrap(), name, *dtype).map(Some),
             // For Assign, all the work is done by the code generation down its branches.
             // We need only to return the right-branch register
             AstNode::Assign { id, expr } => self.binary(tree, expr, id, |_, _, r2| Ok(Some(r2))),
-            AstNode::GlobalDec { id: Identifier { name }} => {
-                self.backend.glob_sym(&name).map(|_| None)
+            AstNode::GlobalDec { id: Identifier { name }, dtype } => {
+                self.backend.glob_sym(name, *dtype).map(|_| None)
             }
         }
     }
@@ -206,9 +209,389 @@ where
     pub fn gen_freeregs(&mut self) -> Result<()> {
         self.backend.free_all_registers()
     }
+}
 
-    pub fn gen_globsym(&mut self, name: &str) -> Result<()> {
-        self.backend.glob_sym(name)
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cg::X86_64Backend;
+    use crate::ast::AstNode;
+    use crate::sym::DataType;
+    use crate::scan::Token;
+
+    fn new_generator() -> CodeGenerator<X86_64Backend<Vec<u8>>> {
+        CodeGenerator::new(X86_64Backend::new(Vec::new()))
+    }
+
+    fn output_string(cg: &CodeGenerator<X86_64Backend<Vec<u8>>>) -> String {
+        String::from_utf8(cg.backend.output.clone()).unwrap()
+    }
+
+    // === Construction ===
+
+    #[test]
+    fn new_starts_with_last_label_zero() {
+        let cg = new_generator();
+        assert_eq!(cg.last_label, 0);
+    }
+
+    #[test]
+    fn label_increments_counter() {
+        let mut cg = new_generator();
+        assert_eq!(cg.label(), 1);
+        assert_eq!(cg.label(), 2);
+        assert_eq!(cg.label(), 3);
+    }
+
+    // === gen_ast: literals and identifiers ===
+
+    #[test]
+    fn gen_ast_intlit_loads_value() {
+        let mut cg = new_generator();
+        let node = AstNode::make_intlit(42, DataType::Int);
+        let result = cg.gen_ast(&node, None, None, 0).unwrap();
+        assert!(result.is_some());
+        assert!(output_string(&cg).contains("movq\t$42,"));
+    }
+
+    #[test]
+    fn gen_ast_intlit_char_range() {
+        let mut cg = new_generator();
+        let node = AstNode::make_intlit(255, DataType::Char);
+        let result = cg.gen_ast(&node, None, None, 0).unwrap();
+        assert!(result.is_some());
+        assert!(output_string(&cg).contains("movq\t$255,"));
+    }
+
+    #[test]
+    fn gen_ast_ident_loads_glob() {
+        let mut cg = new_generator();
+        let node = AstNode::make_ident("x", DataType::Int);
+        let result = cg.gen_ast(&node, None, None, 0).unwrap();
+        assert!(result.is_some());
+        assert!(output_string(&cg).contains("movq\tx(%rip),"));
+    }
+
+    #[test]
+    fn gen_ast_ident_loads_char_glob() {
+        let mut cg = new_generator();
+        let node = AstNode::make_ident("c", DataType::Char);
+        let result = cg.gen_ast(&node, None, None, 0).unwrap();
+        assert!(result.is_some());
+        assert!(output_string(&cg).contains("movzbq\tc(%rip),"));
+    }
+
+    #[test]
+    fn gen_ast_empty_returns_none() {
+        let mut cg = new_generator();
+        let result = cg.gen_ast(&AstNode::Empty, None, None, 0).unwrap();
+        assert!(result.is_none());
+        assert!(output_string(&cg).is_empty());
+    }
+
+    #[test]
+    fn gen_ast_global_dec_calls_glob_sym() {
+        let mut cg = new_generator();
+        let node = AstNode::make_global_declaration("x", DataType::Int);
+        let result = cg.gen_ast(&node, None, None, 0).unwrap();
+        assert!(result.is_none());
+        assert_eq!(output_string(&cg), "\t.comm\tx,8,8\n");
+    }
+
+    // === gen_ast: arithmetic ===
+
+    #[test]
+    fn gen_ast_add_emits_addq() {
+        let mut cg = new_generator();
+        let node = AstNode::make_binary(
+            Token::Plus,
+            AstNode::make_intlit(1, DataType::Char),
+            AstNode::make_intlit(2, DataType::Char),
+            DataType::Char,
+        );
+        cg.gen_ast(&node, None, None, 0).unwrap();
+        let output = output_string(&cg);
+        assert!(output.contains("movq\t$1,"));
+        assert!(output.contains("movq\t$2,"));
+        assert!(output.contains("addq"));
+    }
+
+    #[test]
+    fn gen_ast_sub_emits_subq() {
+        let mut cg = new_generator();
+        let node = AstNode::make_binary(
+            Token::Minus,
+            AstNode::make_intlit(5, DataType::Int),
+            AstNode::make_intlit(3, DataType::Int),
+            DataType::Int,
+        );
+        cg.gen_ast(&node, None, None, 0).unwrap();
+        assert!(output_string(&cg).contains("subq"));
+    }
+
+    #[test]
+    fn gen_ast_mul_emits_imulq() {
+        let mut cg = new_generator();
+        let node = AstNode::make_binary(
+            Token::Star,
+            AstNode::make_intlit(2, DataType::Int),
+            AstNode::make_intlit(4, DataType::Int),
+            DataType::Int,
+        );
+        cg.gen_ast(&node, None, None, 0).unwrap();
+        assert!(output_string(&cg).contains("imulq"));
+    }
+
+    #[test]
+    fn gen_ast_div_emits_idivq() {
+        let mut cg = new_generator();
+        let node = AstNode::make_binary(
+            Token::Slash,
+            AstNode::make_intlit(10, DataType::Int),
+            AstNode::make_intlit(2, DataType::Int),
+            DataType::Int,
+        );
+        cg.gen_ast(&node, None, None, 0).unwrap();
+        assert!(output_string(&cg).contains("idivq"));
+    }
+
+    // === gen_ast: comparison (non-branching → compare_and_set) ===
+
+    #[test]
+    fn gen_ast_eq_emits_sete() {
+        let mut cg = new_generator();
+        let node = AstNode::make_binary(Token::EQ, AstNode::make_intlit(1, DataType::Int), AstNode::make_intlit(2, DataType::Int), DataType::Int);
+        cg.gen_ast(&node, None, None, 0).unwrap();
+        let output = output_string(&cg);
+        assert!(output.contains("cmpq"));
+        assert!(output.contains("sete"));
+    }
+
+    #[test]
+    fn gen_ast_lt_emits_setl() {
+        let mut cg = new_generator();
+        let node = AstNode::make_binary(Token::LT, AstNode::make_intlit(1, DataType::Int), AstNode::make_intlit(2, DataType::Int), DataType::Int);
+        cg.gen_ast(&node, None, None, 0).unwrap();
+        assert!(output_string(&cg).contains("setl"));
+    }
+
+    // === gen_print ===
+
+    #[test]
+    fn gen_print_emits_printint_call() {
+        let mut cg = new_generator();
+        let node = AstNode::make_print(AstNode::make_intlit(42, DataType::Int));
+        cg.gen_ast(&node, None, None, 0).unwrap();
+        let output = output_string(&cg);
+        assert!(output.contains("movq"));
+        assert!(output.contains("call\tprintint"));
+    }
+
+    // === gen_glue_ast ===
+
+    #[test]
+    fn gen_glue_ast_processes_left_then_right() {
+        let mut cg = new_generator();
+        let node = AstNode::make_glue(
+            AstNode::make_print(AstNode::make_intlit(1, DataType::Int)),
+            AstNode::make_print(AstNode::make_intlit(2, DataType::Int)),
+        );
+        cg.gen_ast(&node, None, None, 0).unwrap();
+        let output = output_string(&cg);
+        let first = output.find("movq\t$1,").unwrap();
+        let second = output.find("movq\t$2,").unwrap();
+        assert!(first < second, "left print should precede right print");
+    }
+
+    // === gen_if (branching context → compare_and_jump) ===
+
+    #[test]
+    fn gen_if_without_else() {
+        let mut cg = new_generator();
+        let cond = AstNode::make_binary(Token::LT, AstNode::make_intlit(1, DataType::Char), AstNode::make_intlit(2, DataType::Char), DataType::Char);
+        let body = AstNode::make_print(AstNode::make_intlit(42, DataType::Int));
+        let node = AstNode::make_if(cond, body, None);
+        cg.gen_ast(&node, None, None, 0).unwrap();
+        let output = output_string(&cg);
+        assert!(output.contains("call\tprintint"));
+        assert!(output.contains("L1:"));
+    }
+
+    #[test]
+    fn gen_if_with_else() {
+        let mut cg = new_generator();
+        let cond = AstNode::make_binary(Token::EQ, AstNode::make_intlit(1, DataType::Int), AstNode::make_intlit(2, DataType::Int), DataType::Int);
+        let true_branch = AstNode::make_print(AstNode::make_intlit(10, DataType::Int));
+        let false_branch = AstNode::make_print(AstNode::make_intlit(20, DataType::Int));
+        let node = AstNode::make_if(cond, true_branch, Some(false_branch));
+        cg.gen_ast(&node, None, None, 0).unwrap();
+        let output = output_string(&cg);
+        assert!(output.contains("jne"));
+        assert!(output.contains("jmp\tL2"));
+        assert!(output.contains("L1:"));
+        assert!(output.contains("L2:"));
+    }
+
+    #[test]
+    fn gen_if_nested() {
+        let mut cg = new_generator();
+        let inner_if = AstNode::make_if(
+            AstNode::make_binary(Token::GT, AstNode::make_intlit(3, DataType::Int), AstNode::make_intlit(1, DataType::Int), DataType::Int),
+            AstNode::make_print(AstNode::make_intlit(100, DataType::Int)),
+            None,
+        );
+        let outer_cond = AstNode::make_binary(Token::EQ, AstNode::make_intlit(1, DataType::Int), AstNode::make_intlit(1, DataType::Int), DataType::Int);
+        let node = AstNode::make_if(outer_cond, inner_if, None);
+        cg.gen_ast(&node, None, None, 0).unwrap();
+        let output = output_string(&cg);
+        // Should have two sets of labels
+        assert!(output.contains("L1:"));
+        assert!(output.contains("L2:"));
+        assert!(output.contains("printint"));
+    }
+
+    // === gen_while ===
+
+    #[test]
+    fn gen_while_emits_loop() {
+        let mut cg = new_generator();
+        let cond = AstNode::make_binary(Token::NE, AstNode::make_intlit(0, DataType::Int), AstNode::make_intlit(1, DataType::Int), DataType::Int);
+        let body = AstNode::make_print(AstNode::make_intlit(7, DataType::Int));
+        let node = AstNode::make_while(cond, body);
+        cg.gen_ast(&node, None, None, 0).unwrap();
+        let output = output_string(&cg);
+        assert!(output.contains("L1:"));
+        assert!(output.contains("je"));
+        assert!(output.contains("call\tprintint"));
+        assert!(output.contains("jmp\tL1"));
+        assert!(output.contains("L2:"));
+    }
+
+    #[test]
+    fn gen_while_empty_body() {
+        let mut cg = new_generator();
+        let cond = AstNode::make_binary(Token::EQ, AstNode::make_intlit(1, DataType::Int), AstNode::make_intlit(1, DataType::Int), DataType::Int);
+        let node = AstNode::make_while(cond, AstNode::Empty);
+        cg.gen_ast(&node, None, None, 0).unwrap();
+        let output = output_string(&cg);
+        assert!(output.contains("L1:"));
+        assert!(output.contains("L2:"));
+    }
+
+    // === gen_ast: Assign ===
+
+    #[test]
+    fn gen_ast_assign_stores_int() {
+        let mut cg = new_generator();
+        let id = AstNode::make_lvident("x", DataType::Int);
+        let expr = AstNode::make_intlit(42, DataType::Int);
+        let node = AstNode::make_assign(id, expr);
+        cg.gen_ast(&node, None, None, 0).unwrap();
+        let output = output_string(&cg);
+        assert!(output.contains("movq\t$42,"));
+        assert!(output.contains("x(%rip)"));
+    }
+
+    #[test]
+    fn gen_ast_assign_stores_char_byte() {
+        let mut cg = new_generator();
+        let id = AstNode::make_lvident("c", DataType::Char);
+        let expr = AstNode::make_intlit(7, DataType::Char);
+        let node = AstNode::make_assign(id, expr);
+        cg.gen_ast(&node, None, None, 0).unwrap();
+        assert!(output_string(&cg).contains("movb"));
+    }
+
+    #[test]
+    fn gen_ast_assign_with_expression() {
+        let mut cg = new_generator();
+        let sum = AstNode::make_binary(Token::Plus, AstNode::make_intlit(1, DataType::Int), AstNode::make_intlit(2, DataType::Int), DataType::Int);
+        let id = AstNode::make_lvident("x", DataType::Int);
+        let node = AstNode::make_assign(id, sum);
+        cg.gen_ast(&node, None, None, 0).unwrap();
+        let output = output_string(&cg);
+        assert!(output.contains("addq"));
+        assert!(output.contains("x(%rip)"));
+    }
+
+    // === gen_function ===
+
+    #[test]
+    fn gen_function_emits_complete_function() {
+        let mut cg = new_generator();
+        cg.gen_preamble().unwrap();
+        let name = AstNode::make_ident("main", DataType::Void);
+        let body = AstNode::make_print(AstNode::make_intlit(42, DataType::Int));
+        let node = AstNode::make_function(name, body);
+        cg.gen_ast(&node, None, None, 0).unwrap();
+        let output = output_string(&cg);
+        assert!(output.contains("main:"));
+        assert!(output.contains("call\tprintint"));
+        assert!(output.contains("ret"));
+    }
+
+    #[test]
+    fn gen_function_with_glue_body() {
+        let mut cg = new_generator();
+        let name = AstNode::make_ident("myfunc", DataType::Void);
+        let body = AstNode::make_glue(
+            AstNode::make_global_declaration("x", DataType::Int),
+            AstNode::make_assign(
+                AstNode::make_lvident("x", DataType::Int),
+                AstNode::make_intlit(99, DataType::Int),
+            ),
+        );
+        let node = AstNode::make_function(name, body);
+        cg.gen_ast(&node, None, None, 0).unwrap();
+        let output = output_string(&cg);
+        assert!(output.contains("myfunc:"));
+        assert!(output.contains(".comm\tx,8,8"));
+        assert!(output.contains("movq\t$99,"));
+        assert!(output.contains("ret"));
+    }
+
+    // === gen_preamble / gen_freeregs ===
+
+    #[test]
+    fn gen_preamble_writes_printint() {
+        let mut cg = new_generator();
+        cg.gen_preamble().unwrap();
+        assert!(output_string(&cg).contains("printint:"));
+    }
+
+    #[test]
+    fn gen_freeregs_does_not_panic() {
+        let mut cg = new_generator();
+        cg.gen_ast(&AstNode::make_intlit(1, DataType::Int), None, None, 0).unwrap();
+        cg.gen_freeregs().unwrap();
+    }
+
+    // === Integration: function with print and assignment ===
+
+    #[test]
+    fn function_with_var_decl_and_assign_and_print() {
+        let mut cg = new_generator();
+        cg.gen_preamble().unwrap();
+        let name = AstNode::make_ident("main", DataType::Void);
+        let body = AstNode::make_glue(
+            AstNode::make_glue(
+                AstNode::make_global_declaration("x", DataType::Int),
+                AstNode::make_assign(
+                    AstNode::make_lvident("x", DataType::Int),
+                    AstNode::make_intlit(100, DataType::Int),
+                ),
+            ),
+            AstNode::make_print(AstNode::make_ident("x", DataType::Int)),
+        );
+        let node = AstNode::make_function(name, body);
+        cg.gen_ast(&node, None, None, 0).unwrap();
+        let output = output_string(&cg);
+        assert!(output.contains("main:"));
+        assert!(output.contains(".comm\tx,8,8"));
+        assert!(output.contains("movq\t$100,"));
+        assert!(output.contains("movq\tx(%rip),"));
+        assert!(output.contains("call\tprintint"));
+        assert!(output.contains("ret"));
     }
 }
 

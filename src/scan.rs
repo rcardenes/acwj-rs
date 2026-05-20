@@ -30,6 +30,7 @@ pub enum Token {
     Else,          // else
     For,           // for
     If,            // if
+    Char,          // char
     Int,           // int
     Print,         // print
     Void,          // void
@@ -45,6 +46,7 @@ impl fmt::Display for Token {
 }
 
 static KEYWORDS: &[(&str, Token)] = &[
+    ("char", Token::Char),
     ("else", Token::Else),
     ("for", Token::For),
     ("if", Token::If),
