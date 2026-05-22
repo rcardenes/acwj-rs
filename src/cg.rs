@@ -175,7 +175,7 @@ impl<T> CodeBackend for X86_64Backend<T>
 
     fn preamble(&mut self) -> Result<()> {
         self.free_all_registers()?;
-        write!(self.output, "\t.text")?;
+        write!(self.output, "\t.text\n")?;
         Ok(())
     }
 

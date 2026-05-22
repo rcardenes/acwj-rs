@@ -215,16 +215,27 @@ where
             // For Assign, all the work is done by the code generation down its branches.
             // We need only to return the right-branch register
             AstNode::Assign { id, expr } => self.binary(tree, expr, id, |_, _, r2| Ok(Some(r2))),
-            AstNode::GlobalDec { id: Identifier { name }, dtype } => {
-                self.backend.glob_sym(name, *dtype).map(|_| None)
-            },
+            // AstNode::GlobalDec { id: Identifier { name }, dtype } => {
+            //     self.backend.glob_sym(name, *dtype).map(|_| None)
+            // },
+            AstNode::GlobalDec { ..} => {
+                // Done elsewhere to ensure all globals are at the top of the output, instead of
+                // interspersed with the function code
+                Ok(None)
+            }
             AstNode::FuncCall { .. } => self.gen_func_call(tree),
             AstNode::Return { .. } => self.gen_return(tree),
         }
     }
 
     pub fn gen_preamble(&mut self) -> Result<()> {
-        self.backend.preamble()
+        self.backend.preamble()?;
+
+        for symbol in self.symbols.iter_global_vars() {
+            self.backend.glob_sym(&symbol.name, symbol.dtype)?;
+        }
+
+        Ok(())
     }
 
     pub fn gen_freeregs(&mut self) -> Result<()> {
@@ -322,15 +333,6 @@ mod tests {
         let result = cg.gen_ast(&AstNode::Empty, None, None, 0).unwrap();
         assert!(result.is_none());
         assert!(output_string(&cg).is_empty());
-    }
-
-    #[rstest]
-    fn gen_ast_global_dec_calls_glob_sym(symbols: SymbolTable) {
-        let mut cg = new_generator(&symbols);
-        let node = AstNode::make_global_declaration("x", PrimType::Int);
-        let result = cg.gen_ast(&node, None, None, 0).unwrap();
-        assert!(result.is_none());
-        assert_eq!(output_string(&cg), "\t.comm\tx,4,4\n");
     }
 
     // === gen_ast: arithmetic ===
@@ -570,7 +572,8 @@ mod tests {
         cg.gen_ast(&node, None, None, 0).unwrap();
         let output = output_string(&cg);
         assert!(output.contains("myfunc:"));
-        assert!(output.contains(".comm\tx,8,8"));
+        // Global declarations no longer produce code on the spot
+        assert!(!output.contains(".comm\tx,8,8"));
         assert!(output.contains("movq\t$99,"));
         assert!(output.contains("ret"));
     }
@@ -606,7 +609,8 @@ mod tests {
         cg.gen_ast(&node, None, None, 0).unwrap();
         let output = output_string(&cg);
         assert!(output.contains("main:"));
-        assert!(output.contains(".comm\tx,4,4"));
+        // Global declarations no longer generate output on the spot
+        assert!(!output.contains(".comm\tx,4,4"));
         assert!(output.contains("movq\t$100,"));
         assert!(output.contains("movzbl\tx(%rip),"));
         assert!(output.contains("call\tprintint"));

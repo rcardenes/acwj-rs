@@ -526,7 +526,6 @@ mod tests {
         let scanner = Scanner::new(file);
 
         let tokens: Vec<Token> = ScannerIter::new(scanner).collect();
-        eprintln!("{:?}", tokens);
 
         assert_eq!(tokens, expected.to_vec());
     }
