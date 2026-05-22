@@ -252,7 +252,7 @@ mod tests {
     use super::*;
     use rstest::{fixture, rstest};
     use crate::{
-        cg::X86_64Backend,
+        cg_x86_64::X86_64Backend,
         ast::AstNode,
         sym::SymbolTableBuilder,
         scan::Token,
