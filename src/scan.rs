@@ -27,17 +27,27 @@ pub enum Token {
     LeftParen,     // (
     RightParen,    // )
     Semi,          // ;
+
+    // Keywords
     Else,          // else
     For,           // for
     If,            // if
     Char,          // char
     Int,           // int
-    Print,         // print
+    Long,          // long
+    Return,        // return
     Void,          // void
     While,         // while
+
+    // Literals
     IntLit(i64),   // Integer literal
 }
 
+impl Token {
+    pub fn is_type(&self) -> bool {
+        matches!(self, Token::Void|Token::Char|Token::Int|Token::Long)
+    }
+}
 
 impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -51,7 +61,8 @@ static KEYWORDS: &[(&str, Token)] = &[
     ("for", Token::For),
     ("if", Token::If),
     ("int", Token::Int),
-    ("print", Token::Print),
+    ("long", Token::Long),
+    ("return", Token::Return),
     ("void", Token::Void),
     ("while", Token::While),
 ];
@@ -269,7 +280,7 @@ where T: Read
             if expected(&tok) {
                 Some(tok)
             } else {
-                panic!("Expected {} on line {}", expected_string, self.line.borrow());
+                panic!("Expected {} on line {}; found {} instead", expected_string, self.line.borrow(), tok);
             }
         } else {
             None
@@ -424,6 +435,37 @@ mod tests {
         assert_eq!(scanner.get_line(), 2);
     }
 
+    // --- edge cases / panic tests ---
+
+    #[test]
+    #[should_panic(expected = "Unrecognised character")]
+    fn scan_bang_not_followed_by_equal() {
+        scan_all_mem("!x");
+    }
+
+    #[test]
+    #[should_panic(expected = "Found EOF")]
+    fn scan_bang_at_eof() {
+        scan_all_mem("!");
+    }
+
+    #[test]
+    #[should_panic(expected = "identifier too long")]
+    fn scan_identifier_too_long() {
+        let long_ident = "a".repeat(TEXTLEN + 1);
+        scan_all_mem(&long_ident);
+    }
+
+    // ...
+
+    #[test]
+    fn scan_newline_then_eof() {
+        let scanner = Scanner::new(Cursor::new(b"1\n".to_vec()));
+        assert_eq!(scanner.scan(), Some(Token::IntLit(1)));
+        assert_eq!(scanner.get_line(), 2);
+        assert!(scanner.scan().is_none());
+    }
+
     #[test]
     #[should_panic]
     fn scan_panics_on_unknown_character() {
@@ -541,11 +583,15 @@ mod tests {
 
     #[test]
     fn scan_keywords() {
-        assert_eq!(scan_all_mem("if"), vec![Token::If]);
-        assert_eq!(scan_all_mem("for"), vec![Token::For]);
+        assert_eq!(scan_all_mem("char"), vec![Token::Char]);
         assert_eq!(scan_all_mem("else"), vec![Token::Else]);
+        assert_eq!(scan_all_mem("for"), vec![Token::For]);
+        assert_eq!(scan_all_mem("if"), vec![Token::If]);
+        assert_eq!(scan_all_mem("int"), vec![Token::Int]);
+        assert_eq!(scan_all_mem("long"), vec![Token::Long]);
+        assert_eq!(scan_all_mem("return"), vec![Token::Return]);
+        assert_eq!(scan_all_mem("void"), vec![Token::Void]);
         assert_eq!(scan_all_mem("while"), vec![Token::While]);
-        assert_eq!(scan_all_mem("print"), vec![Token::Print]);
     }
 
     // --- Scanner helper methods ---

@@ -1,8 +1,10 @@
+use std::cell::RefCell;
 use anyhow::{Result, bail};
 use crate::{
     ast::AstNode,
+    cgen::{CodeBackend, CodeGenerator},
     scan::{Scanner, Token},
-    sym::{PrimType, SymbolTable},
+    sym::{PrimType, SymbolEntry, SymbolTable},
 };
 
 pub enum Compatibility {
@@ -41,39 +43,97 @@ fn is_arithop(token: &Token) -> bool {
             |Token::GE)
 }
 
-// Return if two primitive types are compatible.
-// If only_right is true, then widening can happen only left to right
-pub fn is_type_compatible(left: PrimType, right: PrimType, only_right: bool) -> Compatibility {
-    match (left, right) {
-        // Voids are not compatible with anything
-        (PrimType::Void, _) | (_, PrimType::Void) => Compatibility::Incompatible,
-        // Any other type is compatible with itself
-        (x, y) if x == y => Compatibility::Compatible(x),
-        // Widen Char to Int is required
-        (PrimType::Char, PrimType::Int) => Compatibility::WidenLeft(PrimType::Int),
-        (PrimType::Int, PrimType::Char) => if only_right {
-            Compatibility::Incompatible
-        } else {
-            Compatibility::WidenRight(PrimType::Int)
-        },
-        // Anything else is compatible
-        _ => unimplemented!(),
-    }
-}
-
-pub struct ExpressionGenerator<'a, T> {
+pub struct ExpressionGenerator<'a, T, B>
+    where B: CodeBackend,
+{
     scanner: &'a Scanner<T>,
     sym_table: &'a SymbolTable,
+    code_gen: &'a CodeGenerator<'a, B>,
+    in_function: RefCell<Vec<SymbolEntry>>,
 }
 
-impl<'a, T> ExpressionGenerator<'a, T>
+impl<'a, T, B> ExpressionGenerator<'a, T, B>
     where T: std::io::Read,
+          B: CodeBackend,
 {
-    pub fn new(scanner: &'a Scanner<T>, sym_table: &'a SymbolTable) -> Self {
-        ExpressionGenerator { scanner, sym_table }
+    pub fn new(scanner: &'a Scanner<T>, sym_table: &'a SymbolTable, code_gen: &'a CodeGenerator<B>) -> Self {
+        ExpressionGenerator { scanner, sym_table, code_gen, in_function: vec![].into() }
     }
 
-    pub fn primary(&self) -> AstNode
+    // Return if two primitive types are compatible.
+    // If only_right is true, then widening can happen only left to right
+    pub fn type_compatibility(&self, left: PrimType, right: PrimType, only_right: bool) -> Compatibility {
+        let (size_left, size_right) = (
+            self.code_gen.type_size(left),
+            self.code_gen.type_size(right)
+            );
+        if left == right {
+            Compatibility::Compatible(left)
+        } else if size_left == 0 || size_right == 0 {
+            // One of the sides is likely void
+            Compatibility::Incompatible
+        } else if size_left < size_right {
+            Compatibility::WidenLeft(right)
+        } else if size_right < size_left {
+            if only_right {
+                Compatibility::Incompatible
+            } else {
+                Compatibility::WidenRight(left)
+            }
+        } else {
+            // Same sizes
+            Compatibility::Compatible(left)
+        }
+    }
+
+    pub fn enter_function(&self, id: &str) {
+        if let Some(sym) = self.sym_table.find_glob(id) {
+            self.in_function.borrow_mut().push((*sym).clone());
+        } else {
+            // This can't happen under normal circumstances. enter_function is called
+            // AFTER finding the identifier
+            unreachable!("enter_function failed finding its symbol")
+        }
+    }
+
+    pub fn current_function_type(&self) -> PrimType {
+        if let Some(entry) = self.in_function.borrow().last() {
+            entry.dtype
+        } else {
+            self.scanner.fatal("Can't return from outside a function")
+        }
+    }
+
+    pub fn current_function_name(&self) -> String {
+        if let Some(entry) = self.in_function.borrow().last() {
+            entry.name.clone()
+        } else {
+            self.scanner.fatal("Can't return from outside a function")
+        }
+    }
+
+    pub fn exit_function(&self) {
+        if !self.in_function.borrow().is_empty() {
+            let _ = self.in_function.borrow_mut().pop();
+        } else {
+            unreachable!("exit_function called but we're not inside a function")
+        }
+    }
+
+    pub fn function_call(&self, id: &str) -> Result<AstNode> {
+        // Check that the symbol has been declared.
+        // TODO: Add structural type test
+        if let Some(sym) = self.sym_table.find_glob(id) {
+            let expr = self.binexpr(0)?;
+            self.scanner.rparen();
+
+            Ok(AstNode::make_function_call(id, expr, sym.dtype))
+        } else {
+            self.scanner.fatal_extra("Undeclared function", id)
+        }
+    }
+
+    pub fn primary(&self) -> Result<AstNode>
     {
         // For an INTLIT token, make a leaf AST node for it,
         // Otherwise, a syntax error for any other token type
@@ -84,13 +144,15 @@ impl<'a, T> ExpressionGenerator<'a, T>
                 // so that we don't have to narrow it later if needed. Widen the data is
                 // always possible.
                 Token::IntLit(val) => if *val >= 0 && *val < 256 {
-                    AstNode::make_intlit(*val, PrimType::Char)
+                    Ok(AstNode::make_intlit(*val, PrimType::Char))
                 } else {
-                    AstNode::make_intlit(*val, PrimType::Int)
+                    Ok(AstNode::make_intlit(*val, PrimType::Int))
                 },
                 Token::Ident(id) => {
-                    if let Some(found) = self.sym_table.find_glob(id) {
-                        AstNode::make_ident(id, found.dtype)
+                    if self.scanner.maybe_token(Token::LeftParen) {
+                        self.function_call(id.as_str())
+                    } else if let Some(sym) = self.sym_table.find_glob(id) {
+                        Ok(AstNode::make_ident(id, sym.dtype))
                     } else {
                         self.scanner.fatal_extra("Unknown variable", id)
                     }
@@ -107,7 +169,7 @@ impl<'a, T> ExpressionGenerator<'a, T>
     pub fn binexpr(&self, ptp: Precedence) -> Result<AstNode>
         where T: std::io::Read,
     {
-        let mut left = self.primary();
+        let mut left = self.primary()?;
 
         while let Some(token) = self.scanner.scan() {
             if !is_arithop(&token) {
@@ -123,7 +185,7 @@ impl<'a, T> ExpressionGenerator<'a, T>
 
             let mut right = self.binexpr(curr_prec)?;
             let compat = if let (Some(left_type), Some(right_type)) = (left.get_type(), right.get_type()) {
-                is_type_compatible(left_type, right_type, false)
+                self.type_compatibility(left_type, right_type, false)
             } else {
                 Compatibility::Incompatible
             };
@@ -160,12 +222,18 @@ mod tests {
     use rstest::{fixture, rstest};
     use std::io::Cursor;
     use super::*;
+    use crate::dummy_cg::DummyBackend;
 
     fn scanner_from(s: &str) -> Scanner<Cursor<Vec<u8>>> {
         Scanner::new(Cursor::new(s.as_bytes().to_vec()))
     }
 
     type TestInput = Cursor<Vec<u8>>;
+    type CodeGen<'a> = CodeGenerator<'a, DummyBackend>;
+
+    fn code_gen<'a>(symbols: &'a SymbolTable) -> CodeGen<'a> {
+        CodeGenerator::new(DummyBackend{}, &symbols)
+    }
 
     struct TestFramework
     {
@@ -184,12 +252,14 @@ mod tests {
             }
         }
 
-        fn primary(&self) -> AstNode {
-            ExpressionGenerator::new(&self.scanner, &self.sym_table).primary()
+        fn primary(&self) -> Result<AstNode> {
+            let code_gen = code_gen(&self.sym_table);
+            ExpressionGenerator::new(&self.scanner, &self.sym_table, &code_gen).primary()
         }
 
         fn binexpr(&self, ptp: Precedence) -> Result<AstNode> {
-            ExpressionGenerator::new(&self.scanner, &self.sym_table).binexpr(ptp)
+            let code_gen = code_gen(&self.sym_table);
+            ExpressionGenerator::new(&self.scanner, &self.sym_table, &code_gen).binexpr(ptp)
         }
     }
 
@@ -203,26 +273,26 @@ mod tests {
 
     #[rstest]
     fn primary_intlit_returns_leaf_node(#[with("42")] testfr: TestFramework) {
-        let node = testfr.primary();
+        let node = testfr.primary().unwrap();
         assert_eq!(node, AstNode::make_intlit(42, PrimType::Char));
     }
 
     #[rstest]
     fn primary_intlit_in_char_range(#[with("255")] testfr: TestFramework) {
-        let node = testfr.primary();
+        let node = testfr.primary().unwrap();
         assert_eq!(node, AstNode::make_intlit(255, PrimType::Char));
     }
 
     #[rstest]
     #[should_panic]
     fn primary_panics_on_operator_token(#[with("+")] testfr: TestFramework) {
-        testfr.primary();
+        testfr.primary().unwrap();
     }
 
     #[rstest]
     #[should_panic]
     fn primary_panics_at_eof(#[with("")] testfr: TestFramework) {
-        testfr.primary();
+        testfr.primary().unwrap();
     }
 
     // --- binexpr ---

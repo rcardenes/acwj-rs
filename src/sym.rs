@@ -3,14 +3,15 @@ use crate::scan::Token;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StructuralType {
-    Function,
+    Function { end_label: Option<usize> },
     Variable,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrimType {
-    Int,
     Char,
+    Int,
+    Long,
     Void,
 }
 
@@ -19,17 +20,53 @@ impl From<Token> for PrimType {
         match tok {
             Token::Char => PrimType::Char,
             Token::Int => PrimType::Int,
+            Token::Long => PrimType::Long,
             Token::Void => PrimType::Void,
-            // TODO: This needs to provide at least a line number
-            _ => panic!("Illegal type, token {}", tok),
+            // It's bothersome to list them all, but at this point I want to catch new types
+
+            Token::Plus|Token::Minus|Token::Star|Token::Slash
+                |Token::EQ|Token::NE|Token::LT|Token::GT|Token::LE|Token::GE
+                |Token::Assign|Token::Ident(_)|Token::IntLit(_)
+                |Token::LeftBrace|Token::RightBrace|Token::LeftParen|Token::RightParen 
+                |Token::If|Token::Else|Token::For|Token::While
+                |Token::Semi|Token::Return
+                // TODO: This needs to provide at least a line number
+                => panic!("No type for token {:?}", tok)
         }
     }
 }
 
+#[derive(Clone)]
 pub struct SymbolEntry {
-    name: String,
+    pub name: String,
     pub dtype: PrimType,
     pub stype: StructuralType,
+}
+
+pub struct SymbolTableBuilder {
+    globals: Vec<SymbolEntry>,
+}
+
+#[allow(clippy::new_without_default)]
+impl SymbolTableBuilder {
+    pub fn new() -> Self {
+        SymbolTableBuilder { globals: vec![] }
+    }
+
+    pub fn add_glob(mut self, name: &str, dtype: PrimType, stype: StructuralType) -> Self {
+        self.globals.push(SymbolEntry { name: name.into(), dtype, stype });
+        self
+    }
+
+    pub fn add_glob_fn(mut self, name: &str, dtype: PrimType) -> Self {
+        let stype = StructuralType::Function { end_label: None };
+        self.globals.push(SymbolEntry { name: name.into(), dtype, stype });
+        self
+    }
+
+    pub fn build(self) -> SymbolTable {
+        SymbolTable { globals: self.globals.into() }
+    }
 }
 
 pub struct SymbolTable {
@@ -47,10 +84,66 @@ impl SymbolTable {
         self.globals.borrow_mut().push(SymbolEntry { name: name.into(), dtype, stype });
     }
 
-    pub fn find_glob(&self, name: &str) -> Option<Ref<'_, SymbolEntry>> {
+    pub fn add_glob_fn(&self, name: &str, dtype: PrimType) {
+        let stype = StructuralType::Function { end_label: None };
+        self.globals.borrow_mut().push(SymbolEntry { name: name.into(), dtype, stype });
+    }
+
+    fn find_pos(&self, name: &str) -> Option<usize> {
         let borrow = self.globals.borrow();
-        let res = borrow.iter().position(|e| e.name == name);
-        res.map(|i| Ref::map(borrow, |vec| &vec[i]))
+        borrow.iter().position(|e| e.name == name)
+    }
+
+    pub fn find_glob(&self, name: &str) -> Option<Ref<'_, SymbolEntry>> {
+        let index = self.find_pos(name);
+        let borrow = self.globals.borrow();
+        index.map(|i| Ref::map(borrow, |vec| &vec[i]))
+    }
+
+    pub fn set_fn_end_label(&self, name: &str, label: usize) {
+        if let Some(index) = self.find_pos(name) {
+            let mut borrowed = self.globals.borrow_mut();
+            let old_entry = &(*borrowed)[index];
+            let new_entry = match old_entry {
+                &SymbolEntry { dtype, stype: StructuralType::Function { end_label: None }, .. } => {
+                    SymbolEntry { name: name.into(), dtype, stype: StructuralType::Function { end_label: Some(label) } }
+                },
+                &SymbolEntry { stype: StructuralType::Function { end_label: Some(_) }, .. } => {
+                    panic!("sym.rs: Trying to set end label for function '{}' which already has one", name)
+                },
+                _ => panic!("sym.rs: Trying to set end label for a non-function symbol"),
+            };
+            (*borrowed)[index] = new_entry;
+        } else {
+            panic!("sym.rs: Trying to set end label for undefined symbol '{}'", name)
+        }
+    }
+
+    pub fn get_fn_end_label(&self, name: &str) -> usize {
+        if let Some(index) = self.find_pos(name) {
+            let borrowed = self.globals.borrow();
+            match &(*borrowed)[index] {
+                &SymbolEntry { stype: StructuralType::Function { end_label: Some(label) }, .. } => label,
+                &SymbolEntry { stype: StructuralType::Function { end_label: None }, .. } => {
+                    panic!("sym.rs: Trying to get end label for function '{}' which has none", name)
+                },
+                _ => panic!("sym.rs: Trying to get end label for a non-function symbol"),
+            }
+        } else {
+            panic!("sym.rs: Trying to get end label for undefined symbol '{}'", name)
+        }
+    }
+
+    pub fn get_fn_dtype(&self, name: &str) -> PrimType {
+        if let Some(index) = self.find_pos(name) {
+            let borrowed = self.globals.borrow();
+            match &(*borrowed)[index] {
+                &SymbolEntry { dtype, stype: StructuralType::Function { .. }, .. } => dtype,
+                _ => panic!("sym.rs: Trying to get type for a non-function symbol"),
+            }
+        } else {
+            panic!("sym.rs: Trying to get type for undefined symbol '{}'", name)
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -68,7 +161,9 @@ impl SymbolTable {
 
 impl Default for SymbolTable {
     fn default() -> Self {
-        Self::new()
+        SymbolTableBuilder::new()
+            .add_glob_fn("printint", PrimType::Void)
+            .build()
     }
 }
 

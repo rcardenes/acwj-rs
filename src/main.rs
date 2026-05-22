@@ -4,8 +4,8 @@ use acwj_rs::{
     Scanner,
     cg::X86_64Backend,
     cgen::CodeGenerator,
-    sym::SymbolTable,
     pars::Parser,
+    sym::SymbolTable,
 };
 
 #[derive(ClapParser, Debug)]
@@ -21,17 +21,24 @@ fn main() -> Result<()> {
     let scanner = Scanner::new(file);
 
     let output = std::fs::File::create(args.output)?;
-    let mut code_gen = CodeGenerator::new(X86_64Backend::new(output));
 
-    let symbols = SymbolTable::new();
-    let parser = Parser::new(&scanner, &symbols);
-    // Generate code and AST on the fly
-    // Traverse the AST to generate code
-    code_gen.gen_preamble()?;
+    // Generate symbol table populated with predefined symbols
+    let symbols = SymbolTable::default();
+
+    let mut code_gen = CodeGenerator::new(X86_64Backend::new(output), &symbols);
+    let parser = Parser::new(&scanner, &symbols, &code_gen);
+
+    // Generate AST
+    let mut functions = vec![];
 
     while let Some(tree) = parser.function_declaration()? {
-        code_gen.gen_ast(&tree, None, None, 0)?;
+        functions.push(tree);
+    }
 
+    // Traverse the AST to generate code
+    code_gen.gen_preamble()?;
+    for tree in functions {
+        code_gen.gen_ast(&tree, None, None, 0)?;
     }
 
     Ok(())

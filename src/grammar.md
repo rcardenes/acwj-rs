@@ -3,15 +3,12 @@ compound_statement: '{' '}'          // empty, i.e. no statement
      |      '{' statement statements '}'
      ;
 
-statement: print_statement
-     |     declaration
+statement: declaration
      |     assignment_statement
      |     if_statement
      |     while_statement
      |     for_statement
      ;
-
-print_statement: 'print' expression ';'  ;
 
 declaration: 'int' identifier ';'
      |       'char' identifier ';'
@@ -36,5 +33,9 @@ preop_statement:  statement  ;        (for now)
 postop_statement: statement  ;        (for now)
 
 function_declaration: 'void' identifier '(' ')' compound_statement   ;
+
+function_call: identifier '(' expression ')' ;
+
+return: 'return' '(' expression ')' ;
 
 identifier: T_IDENT ;

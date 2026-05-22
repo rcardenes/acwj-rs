@@ -23,6 +23,9 @@ pub enum AstNode {
     Ident { id: Identifier, dtype: PrimType },
     LvIdent { id: Identifier, dtype: PrimType },
 
+    // Unary operations
+    FuncCall { id: Identifier, dtype: PrimType, left: Box<AstNode> },
+
     // Binary operations
     //   -- arithmetic
     Add { left: Box<AstNode>, right: Box<AstNode>, dtype: PrimType },
@@ -42,12 +45,12 @@ pub enum AstNode {
     GlobalDec { id: Identifier, dtype: PrimType },
 
     // Statements
-    Empty, // Empty statement, meant to ensure that we can describe empty compound statements
     Assign { id: Box<AstNode>, expr: Box<AstNode> },
     Glue { left: Box<AstNode>, right: Box<AstNode> },
+    Empty, // Empty statement, meant to ensure that we can describe empty compound statements
     If { cond: Box<AstNode>, branch_t: Box<AstNode>, branch_f: Option<Box<AstNode>> },
+    Return { id: Identifier, expr: Box<AstNode> },
     While { cond: Box<AstNode>, body: Box<AstNode> },
-    Print { expr: Box<AstNode> },
 }
 
 impl AstNode {
@@ -87,6 +90,7 @@ impl AstNode {
                 | AstNode::GreaterThan { dtype, .. }
                 | AstNode::LessThanOrEqual { dtype, .. }
                 | AstNode::GreaterThanOrEqual { dtype, .. }
+                | AstNode::FuncCall { dtype, .. }
             => Some(*dtype),
             _ => None,
         }
@@ -189,6 +193,10 @@ impl AstNode {
         }
     }
 
+    pub fn make_function_call(name: &str, expr: AstNode, dtype: PrimType) -> AstNode {
+        AstNode::FuncCall { id: Identifier::new(name), dtype, left: Box::new(expr) }
+    }
+
     pub fn make_global_declaration(name: &str, dtype: PrimType) -> AstNode {
         AstNode::GlobalDec { id: Identifier::new(name), dtype }
     }
@@ -218,17 +226,15 @@ impl AstNode {
         }
     }
 
-    pub fn make_print(expr: AstNode) -> AstNode {
-        AstNode::Print {
-            expr: Box::new(expr),
-        }
-    }
-
     pub fn make_glue(left: AstNode, right: AstNode) -> AstNode {
         AstNode::Glue {
             left: Box::new(left),
             right: Box::new(right),
         }
+    }
+
+    pub fn make_return(name: &str, expr: AstNode) -> AstNode {
+        AstNode::Return { id: Identifier::new(name), expr: Box::new(expr), }
     }
 }
 
@@ -436,12 +442,6 @@ mod tests {
     fn make_while_creates_while_node() {
         let node = AstNode::make_while(AstNode::make_intlit(1, PrimType::Int), AstNode::Empty);
         assert!(matches!(&node, AstNode::While { .. }));
-    }
-
-    #[test]
-    fn make_print_creates_print_node() {
-        let node = AstNode::make_print(AstNode::make_intlit(42, PrimType::Int));
-        assert!(matches!(&node, AstNode::Print { .. }));
     }
 
     #[test]

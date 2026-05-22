@@ -6,4 +6,6 @@ pub mod scan;
 pub mod pars;
 pub mod sym;
 
+pub mod dummy_cg;
+
 pub use scan::{Scanner, Token};
