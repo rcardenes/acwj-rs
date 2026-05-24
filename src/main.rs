@@ -1,13 +1,14 @@
 use std::{
-    io::Write,
-    process
+    io::Read,
+    process::ExitCode
 };
 use anyhow::Result;
 use clap::Parser as ClapParser;
 use acwj_rs::{
     Scanner,
-    cg_x86_64::X86_64Backend,
-    cgen::{CodeBackend, CodeGenerator},
+    cg_arm32::ArmV7Backend,
+    cg_x86_64::X86_64Backend, 
+    cgen::{CodeBackend, CodeGenerator}, 
     pars::Parser,
     sym::SymbolTable,
 };
@@ -28,39 +29,11 @@ struct Cli {
     output: String,
 }
 
-fn select_backend<T>(arch: &str, output: T) -> impl CodeBackend
-    where T: Write,
+fn compile<T, B>(scanner: &Scanner<T>, symbols: &SymbolTable, code_gen: &mut CodeGenerator<B>) -> Result<()>
+    where T: Read,
+          B: CodeBackend,
 {
-    match arch {
-        "?" => {
-            println!("Valid target architectures:\n");
-            println!("  x86_64 -> Intel/AMD 64-bit x86");
-            println!("  arm32  -> armv7 (Raspberry Pi 3/4)");
 
-            process::exit(0)
-        },
-        "x86_64" => X86_64Backend::new(output),
-        "arm32" => unimplemented!(),
-        _ => {
-            println!("Unknown architecture: '{}'. Using the default '{}'", arch, DEFAULT_ARCH);
-            X86_64Backend::new(output)
-        }
-    }
-}
-
-fn main() -> Result<()> {
-    let args = Cli::parse();
-
-    let file = std::fs::File::open(args.file_name).expect("Failed to open file");
-    let output = std::fs::File::create(args.output)?;
-
-    let scanner = Scanner::new(file);
-    let backend = select_backend(&args.arch, output);
-
-    // Generate symbol table populated with predefined symbols
-    let symbols = SymbolTable::default();
-
-    let mut code_gen = CodeGenerator::new(backend, &symbols);
     let parser = Parser::new(&scanner, &symbols, &code_gen);
 
     // Generate AST
@@ -77,4 +50,60 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn main() -> ExitCode {
+    let args = Cli::parse();
+
+    let file = match std::fs::File::open(args.file_name) {
+        Ok(fd) => fd,
+        Err(st) => {
+            eprintln!("{}", st);
+            return ExitCode::FAILURE
+        }
+    };
+    let output = match std::fs::File::create(args.output) {
+        Ok(fd) => fd,
+        Err(st) => {
+            eprintln!("{}", st);
+            return ExitCode::FAILURE
+        }
+    };
+
+    let scanner = Scanner::new(file);
+    // Generate symbol table populated with predefined symbols
+    let symbols = SymbolTable::default();
+
+    let arch = args.arch.as_str();
+
+    if arch == "?" {
+        println!("Valid target architectures:\n");
+        println!("  x86_64 -> Intel/AMD 64-bit x86");
+        println!("  arm32  -> armv7 (Raspberry Pi 3/4)");
+
+        ExitCode::SUCCESS
+    } else {
+        let res = match arch {
+            "arm32" => {
+                let mut code_gen = CodeGenerator::new(ArmV7Backend::new(output), &symbols);
+                compile(&scanner, &symbols, &mut code_gen)
+            },
+            _ => {
+                if arch != DEFAULT_ARCH {
+                    println!("Unknown architecture: '{}'. Using the default '{}'", arch, DEFAULT_ARCH);
+                }
+                let mut code_gen = CodeGenerator::new(X86_64Backend::new(output), &symbols);
+                compile(&scanner, &symbols, &mut code_gen)
+            }
+        };
+
+        match res {
+            Ok(_) => ExitCode::SUCCESS,
+            Err(st) => {
+                eprintln!("{}", st);
+                ExitCode::FAILURE
+            },
+        }
+    }
+
 }

@@ -1,5 +1,6 @@
 pub mod ast;
 pub mod cg_x86_64;
+pub mod cg_arm32;
 pub mod expr;
 pub mod cgen;
 pub mod scan;

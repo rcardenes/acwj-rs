@@ -11,8 +11,20 @@ pub enum DummyReg {
 
 pub struct DummyBackend {}
 
+impl std::io::Write for DummyBackend {
+    fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+        Ok(0)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 impl CodeBackend for DummyBackend {
     type Reg = DummyReg;
+
+    fn alignment() -> usize { 0 }
 
     fn free_all_registers(&mut self) -> Result<()> {
         todo!()
@@ -84,10 +96,6 @@ impl CodeBackend for DummyBackend {
     }
 
     fn jump(&mut self, _: usize) -> Result<()> {
-        todo!()
-    }
-
-    fn print_int(&mut self, _: Self::Reg) -> Result<()> {
         todo!()
     }
 

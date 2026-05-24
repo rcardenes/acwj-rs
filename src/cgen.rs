@@ -1,35 +1,70 @@
 // Given an AST, generate code recursively
 
-use std::cell::RefCell;
+use std::{
+    cell::RefCell,
+    io::Write,
+};
+
 use anyhow::Result;
 use crate::{
     ast::{AstNode, Identifier},
     sym::{PrimType, SymbolTable},
 };
 
-pub trait CodeBackend {
+pub trait CodeBackend: Write {
     type Reg: Copy;
 
+    // Required
+    fn alignment() -> usize;
     fn free_all_registers(&mut self) -> Result<()>;
-    fn preamble(&mut self) -> Result<()>;
     fn type_size(&self, dtype: PrimType) -> usize;
     fn func_preamble(&mut self, ident: &str) -> Result<()>;
     fn func_postamble(&mut self, label_num: usize) -> Result<()>;
     fn load_int(&mut self, val: i64) -> Result<Self::Reg>;
     fn load_glob(&mut self, ident: &str, dtype: PrimType) -> Result<Self::Reg>;
     fn store_glob(&mut self, r: Self::Reg, ident: &str, dtype: PrimType) -> Result<Self::Reg>;
-    fn glob_sym(&mut self, sym: &str, dtype: PrimType) -> Result<()>;
     fn add(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Option<Self::Reg>>;
     fn sub(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Option<Self::Reg>>;
     fn mul(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Option<Self::Reg>>;
     fn div(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Option<Self::Reg>>;
     fn compare_and_set(&mut self, op: &AstNode, r1: Self::Reg, r2: Self::Reg) -> Result<Option<Self::Reg>>;
     fn compare_and_jump(&mut self, op: &AstNode, r1: Self::Reg, r2: Self::Reg, label_num: usize) -> Result<Option<Self::Reg>>;
-    fn label(&mut self, label_num: usize) -> Result<()>;
     fn jump(&mut self, label_num: usize) -> Result<()>;
-    fn print_int(&mut self, r: Self::Reg) -> Result<()>;
     fn call(&mut self, r: Self::Reg, ident: &str) -> Result<Option<Self::Reg>>;
     fn ret(&mut self, r: Self::Reg, dtype: PrimType, label_num: usize) -> Result<()>;
+
+    // Provided
+
+    // For the time being we're not initializing global symbols with a value,
+    // and it's the same for both ARM and X86_64
+    fn label(&mut self, label_num: usize) -> Result<()> {
+        writeln!(self, ".L{}:", label_num)?;
+        Ok(())
+    }
+
+    fn glob_sym(&mut self, sym: &str, dtype: PrimType) -> Result<()> {
+        writeln!(self, ".global {sym}")?;
+        writeln!(self, "{sym}:")?;
+        let size = self.type_size(dtype);
+        if size == 0 {
+            panic!("glob_sym: trying to emit code for size-0 symbol '{sym}'")
+        }
+        writeln!(self, "\t.zero {size}")?;
+
+        Ok(())
+    }
+
+    fn preamble(&mut self) -> Result<()> {
+        self.free_all_registers()?;
+        writeln!(self, ".text")?;
+        Ok(())
+    }
+
+    fn data_section(&mut self) -> Result<()> {
+        writeln!(self, ".bss\n.align {}", Self::alignment())?;
+
+        Ok(())
+    }
 }
 
 pub struct CodeGenerator<'a, B>
@@ -229,11 +264,12 @@ where
     }
 
     pub fn gen_preamble(&mut self) -> Result<()> {
-        self.backend.preamble()?;
 
+        self.backend.data_section()?;
         for symbol in self.symbols.iter_global_vars() {
             self.backend.glob_sym(&symbol.name, symbol.dtype)?;
         }
+        self.backend.preamble()?;
 
         Ok(())
     }
@@ -452,9 +488,9 @@ mod tests {
         cg.gen_ast(&node, None, None, 0).unwrap();
         let output = output_string(&cg);
         assert!(output.contains("jne"));
-        assert!(output.contains("jmp\tL2"));
-        assert!(output.contains("L1:"));
-        assert!(output.contains("L2:"));
+        assert!(output.contains("jmp\t.L2"));
+        assert!(output.contains(".L1:"));
+        assert!(output.contains(".L2:"));
     }
 
     #[rstest]
@@ -470,8 +506,8 @@ mod tests {
         cg.gen_ast(&node, None, None, 0).unwrap();
         let output = output_string(&cg);
         // Should have two sets of labels
-        assert!(output.contains("L1:"));
-        assert!(output.contains("L2:"));
+        assert!(output.contains(".L1:"));
+        assert!(output.contains(".L2:"));
         assert!(output.contains("printint"));
     }
 
@@ -485,11 +521,11 @@ mod tests {
         let node = AstNode::make_while(cond, body);
         cg.gen_ast(&node, None, None, 0).unwrap();
         let output = output_string(&cg);
-        assert!(output.contains("L1:"));
+        assert!(output.contains(".L1:"));
         assert!(output.contains("je"));
         assert!(output.contains("call\tprintint"));
-        assert!(output.contains("jmp\tL1"));
-        assert!(output.contains("L2:"));
+        assert!(output.contains("jmp\t.L1"));
+        assert!(output.contains(".L2:"));
     }
 
     #[rstest]

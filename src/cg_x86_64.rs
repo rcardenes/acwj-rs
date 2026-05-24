@@ -11,7 +11,7 @@ use crate::{
 };
 
 static FUNC_PREAMBLE: &str = "
-\t.text
+.text
 \t.globl\t{name}
 \t.type\t{name}, @function
 {name}:
@@ -160,10 +160,28 @@ impl<T> X86_64Backend<T>
     }
 }
 
+impl<T> Write for X86_64Backend<T>
+    where T: Write,
+{
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.output.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.output.flush()
+    }
+}
+
 impl<T> CodeBackend for X86_64Backend<T>
     where T: Write
 {
     type Reg = X86_64Reg;
+
+    fn alignment() -> usize {
+        // Will force alignment to 2^3 bytes, so 64 bits.
+        // Override for other alignments.
+        8
+    }
 
     fn free_all_registers(&mut self) -> Result<()> {
         for val in self.reg_status.values_mut() {
@@ -173,28 +191,21 @@ impl<T> CodeBackend for X86_64Backend<T>
         Ok(())
     }
 
-    fn preamble(&mut self) -> Result<()> {
-        self.free_all_registers()?;
-        write!(self.output, "\t.text\n")?;
-        Ok(())
-    }
-
     fn func_preamble(&mut self, ident: &str) -> Result<()> {
         let preamble = FUNC_PREAMBLE.replace("{name}", ident);
-        write!(self.output, "{}", preamble)?;
+        write!(self, "{}", preamble)?;
         Ok(())
     }
 
     fn func_postamble(&mut self, label_num: usize) -> Result<()> {
         self.label(label_num)?;
-        write!(self.output, "{}", POSTAMBLE)?;
+        write!(self, "{}", POSTAMBLE)?;
         Ok(())
     }
 
     fn load_int(&mut self, val: i64) -> Result<Self::Reg> {
         let reg = self.alloc_register();
-//        writeln!(self.output, "# load_int({val})")?;
-        writeln!(self.output, "\tmovq\t${}, {}", val, reg)?;
+        writeln!(self, "\tmovq\t${}, {}", val, reg)?;
 
         Ok(reg)
     }
@@ -203,11 +214,11 @@ impl<T> CodeBackend for X86_64Backend<T>
         // Get a new register
         let reg = self.alloc_register();
 
-//        writeln!(self.output, "# load_glob({ident}, {dtype:?})")?;
+//        writeln!(self, "# load_glob({ident}, {dtype:?})")?;
         match dtype {
-            PrimType::Char => writeln!(self.output, "\tmovzbq\t{}(%rip), {}", ident, reg.as_8b())?,
-            PrimType::Int => writeln!(self.output, "\tmovzbl\t{}(%rip), {}", ident, reg.as_32b())?,
-            PrimType::Long => writeln!(self.output, "\tmovq\t{}(%rip), {}", ident, reg)?,
+            PrimType::Char => writeln!(self, "\tmovzbq\t{}(%rip), {}", ident, reg.as_8b())?,
+            PrimType::Int => writeln!(self, "\tmovzbl\t{}(%rip), {}", ident, reg.as_32b())?,
+            PrimType::Long => writeln!(self, "\tmovq\t{}(%rip), {}", ident, reg)?,
             PrimType::Void => unreachable!("Bad type in load_glob: {dtype:?}"),
         }
 
@@ -215,31 +226,21 @@ impl<T> CodeBackend for X86_64Backend<T>
     }
 
     fn store_glob(&mut self, r: Self::Reg, ident: &str, dtype: PrimType) -> Result<Self::Reg> {
-//        writeln!(self.output, "# store_glob({r:?}, {ident}, {dtype:?})")?;
+//        writeln!(self, "# store_glob({r:?}, {ident}, {dtype:?})")?;
         match dtype {
-            PrimType::Char => writeln!(self.output, "\tmovb\t{}, {}(%rip)", r.as_8b(), ident)?,
-            PrimType::Int => writeln!(self.output, "\tmovl\t{}, {}(%rip)", r.as_32b(), ident)?,
-            PrimType::Long => writeln!(self.output, "\tmovq\t{}, {}(%rip)", r, ident)?,
+            PrimType::Char => writeln!(self, "\tmovb\t{}, {}(%rip)", r.as_8b(), ident)?,
+            PrimType::Int => writeln!(self, "\tmovl\t{}, {}(%rip)", r.as_32b(), ident)?,
+            PrimType::Long => writeln!(self, "\tmovq\t{}, {}(%rip)", r, ident)?,
             PrimType::Void => unreachable!("Can't generate store_glob for void types!"),
         }
 
         Ok(r)
     }
 
-    fn glob_sym(&mut self, sym: &str, dtype: PrimType) -> Result<()> {
-        let size = self.type_size(dtype);
-        if size == 0 {
-            panic!("glob_sym: trying to emit code for size-0 symbol '{sym}'")
-        }
-        writeln!(self.output, "\t.comm\t{sym},{size},{size}")?;
-
-        Ok(())
-    }
-
     // Add two registers together and return
     // the number of the register with the result
     fn add(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Option<Self::Reg>> {
-        writeln!(self.output, "\taddq\t{}, {}", r1, r2)?;
+        writeln!(self, "\taddq\t{}, {}", r1, r2)?;
         self.free_register(r1);
 
         Ok(Some(r2))
@@ -248,7 +249,7 @@ impl<T> CodeBackend for X86_64Backend<T>
     // Subtract the second register from the first and
     // return the number of the register with the result
     fn sub(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Option<Self::Reg>> {
-        writeln!(self.output, "\tsubq\t{}, {}", r2, r1)?;
+        writeln!(self, "\tsubq\t{}, {}", r2, r1)?;
         self.free_register(r2);
 
         Ok(Some(r1))
@@ -257,60 +258,46 @@ impl<T> CodeBackend for X86_64Backend<T>
     // Multiply two registers together and return
     // the number of the register with the result
     fn mul(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Option<Self::Reg>> {
-        writeln!(self.output, "\timulq\t{}, {}", r1, r2)?;
+        writeln!(self, "\timulq\t{}, {}", r1, r2)?;
         self.free_register(r1);
 
         Ok(Some(r2))
     }
 
     // Divide the first register by the second and
-    // regurn the number of the register with the result
+    // return the number of the register with the result
     fn div(&mut self, r1: Self::Reg, r2: Self::Reg) -> Result<Option<Self::Reg>> {
-        writeln!(self.output, "\tmovq\t{r1}, %rax")?;
-        writeln!(self.output, "\tcqo")?;
-        writeln!(self.output, "\tidivq\t{r2}")?;
-        writeln!(self.output, "\tmovq\t%rax, {r1}")?;
+        writeln!(self, "\tmovq\t{r1}, %rax")?;
+        writeln!(self, "\tcqo")?;
+        writeln!(self, "\tidivq\t{r2}")?;
+        writeln!(self, "\tmovq\t%rax, {r1}")?;
         self.free_register(r2);
 
         Ok(Some(r1))
     }
 
-    fn label(&mut self, label_num: usize) -> Result<()> {
-        writeln!(self.output, "L{}:", label_num)?;
-        Ok(())
-    }
-
     fn jump(&mut self, label_num: usize) -> Result<()> {
-        writeln!(self.output, "\tjmp\tL{}", label_num)?;
+        writeln!(self, "\tjmp\t.L{}", label_num)?;
         Ok(())
     }
 
     fn compare_and_set(&mut self, op: &AstNode, r1: Self::Reg, r2: Self::Reg) -> Result<Option<Self::Reg>> {
         let r2_8b = r2.as_8b();
 
-        writeln!(self.output, "\tcmpq\t{}, {}", r2, r1)?;
-        writeln!(self.output, "\t{}\t{}", ast_to_set_op(op), r2_8b)?;
-        writeln!(self.output, "\tmovzbq\t{}, {}", r2_8b, r2)?;
+        writeln!(self, "\tcmpq\t{}, {}", r2, r1)?;
+        writeln!(self, "\t{}\t{}", ast_to_set_op(op), r2_8b)?;
+        writeln!(self, "\tmovzbq\t{}, {}", r2_8b, r2)?;
         self.free_register(r1);
 
         Ok(Some(r2))
     }
 
     fn compare_and_jump(&mut self, op: &AstNode, r1: Self::Reg, r2: Self::Reg, label_num: usize) -> Result<Option<Self::Reg>> {
-        writeln!(self.output, "\tcmpq\t{}, {}", r2, r1)?;
-        writeln!(self.output, "\t{}\tL{}", ast_to_jmp_op(op), label_num)?;
+        writeln!(self, "\tcmpq\t{}, {}", r2, r1)?;
+        writeln!(self, "\t{}\t.L{}", ast_to_jmp_op(op), label_num)?;
         self.free_all_registers()?;
 
         Ok(None)
-    }
-
-
-    fn print_int(&mut self, r: Self::Reg) -> Result<()> {
-        writeln!(self.output, "\tmovq\t{r}, %rdi")?;
-        writeln!(self.output, "\tcall\tprintint")?;
-        self.free_register(r);
-
-        Ok(())
     }
 
     fn type_size(&self, dtype: PrimType) -> usize {
@@ -323,21 +310,18 @@ impl<T> CodeBackend for X86_64Backend<T>
     }
 
     fn call(&mut self, r: Self::Reg, ident: &str) -> Result<Option<Self::Reg>> {
-        let outr = self.alloc_register();
+        writeln!(self, "\tmovq\t{}, %rdi", r)?;
+        writeln!(self, "\tcall\t{}", ident)?;
+        writeln!(self, "\tmovq\t%rax, {}", r)?;
 
-        writeln!(self.output, "\tmovq\t{}, %rdi", r)?;
-        writeln!(self.output, "\tcall\t{}", ident)?;
-        writeln!(self.output, "\tmovq\t%rax, {}", outr)?;
-        self.free_register(r);
-
-        Ok(Some(outr))
+        Ok(Some(r))
     }
 
     fn ret(&mut self, r: Self::Reg, dtype: PrimType, label_num: usize) -> Result<()> {
         match dtype {
-            PrimType::Char => writeln!(self.output, "\tmovzbl\t{}, %eax", r.as_8b())?,
-            PrimType::Int => writeln!(self.output, "\tmovl\t{}, %eax", r.as_32b())?,
-            PrimType::Long => writeln!(self.output, "\tmovq\t{}, %eax", r)?,
+            PrimType::Char => writeln!(self, "\tmovzbl\t{}, %eax", r.as_8b())?,
+            PrimType::Int => writeln!(self, "\tmovl\t{}, %eax", r.as_32b())?,
+            PrimType::Long => writeln!(self, "\tmovq\t{}, %eax", r)?,
             PrimType::Void => panic!("Bad function type in code backend ret: Void")
         }
 
@@ -534,19 +518,19 @@ mod tests {
     #[rstest]
     fn glob_sym_long(mut backend: Backend) {
         backend.glob_sym("l", PrimType::Long).unwrap();
-        assert_eq!(output_string(&backend), "\t.comm\tl,8,8\n");
+        assert_eq!(output_string(&backend), ".global l\nl:\n\t.zero 8\n");
     }
 
     #[rstest]
     fn glob_sym_int(mut backend: Backend) {
         backend.glob_sym("x", PrimType::Int).unwrap();
-        assert_eq!(output_string(&backend), "\t.comm\tx,4,4\n");
+        assert_eq!(output_string(&backend), ".global x\nx:\n\t.zero 4\n");
     }
 
     #[rstest]
     fn glob_sym_char(mut backend: Backend) {
         backend.glob_sym("c", PrimType::Char).unwrap();
-        assert_eq!(output_string(&backend), "\t.comm\tc,1,1\n");
+        assert_eq!(output_string(&backend), ".global c\nc:\n\t.zero 1\n");
     }
 
     #[rstest]
@@ -608,13 +592,13 @@ mod tests {
     #[rstest]
     fn label_writes_label(mut backend: Backend) {
         backend.label(42).unwrap();
-        assert_eq!(output_string(&backend), "L42:\n");
+        assert_eq!(output_string(&backend), ".L42:\n");
     }
 
     #[rstest]
     fn jump_writes_jmp(mut backend: Backend) {
         backend.jump(7).unwrap();
-        assert_eq!(output_string(&backend), "\tjmp\tL7\n");
+        assert_eq!(output_string(&backend), "\tjmp\t.L7\n");
     }
 
     // === Comparisons: compare_and_set ===
@@ -684,18 +668,6 @@ mod tests {
         let eq = AstNode::make_binary(Token::EQ, AstNode::make_intlit(0, PrimType::Int), AstNode::make_intlit(0, PrimType::Int), PrimType::Int);
         backend.compare_and_jump(&eq, r1, r2, 1).unwrap();
         assert!(all_free(&backend));
-    }
-
-    // === Print int ===
-
-    #[rstest]
-    fn print_int_moves_to_rdi_and_calls(mut backend: Backend) {
-        let reg = backend.alloc_register();
-        backend.print_int(reg).unwrap();
-        let output = output_string(&backend);
-        assert!(output.contains(&format!("\tmovq\t{}, %rdi", reg)));
-        assert!(output.contains("\tcall\tprintint"));
-        assert!(backend.reg_status[&reg]);
     }
 
     // === ast_to_jmp_op ===
