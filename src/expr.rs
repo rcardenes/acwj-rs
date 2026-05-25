@@ -164,12 +164,31 @@ impl<'a, T, B> ExpressionGenerator<'a, T, B>
         }
     }
 
+    fn prefix(&self) -> Result<AstNode> {
+        if let Some(token) = self.scanner.scan() {
+            match token {
+                Token::Amper => {
+                    Ok(self.prefix()?.into_pointer("& operator must be followed by an identifier"))
+                },
+                Token::Star => {
+                    Ok(self.prefix()?.make_deref("* operator must be followed by an identifier or *"))
+                },
+                _ => {
+                    self.scanner.putback_token(token);
+                    self.primary()
+                }
+            }
+        } else {
+            panic!("EOF reached, expected an expression")
+        }
+    }
+
     // Return an AST tree whose root is a binary operator.
     // ptp is the precedence of the previous token
     pub fn binexpr(&self, ptp: Precedence) -> Result<AstNode>
         where T: std::io::Read,
     {
-        let mut left = self.primary()?;
+        let mut left = self.prefix()?;
 
         while let Some(token) = self.scanner.scan() {
             if !is_arithop(&token) {
@@ -223,6 +242,7 @@ mod tests {
     use std::io::Cursor;
     use super::*;
     use crate::dummy_cg::DummyBackend;
+    use crate::sym::StructuralType;
 
     fn scanner_from(s: &str) -> Scanner<Cursor<Vec<u8>>> {
         Scanner::new(Cursor::new(s.as_bytes().to_vec()))
@@ -377,5 +397,133 @@ mod tests {
                                               AstNode::make_intlit(3, PrimType::Char),
                                               AstNode::make_intlit(5, PrimType::Char),
                                               PrimType::Char));
+    }
+
+    // --- type_compatibility ---
+
+    #[test]
+    fn type_compatibility_equal_types() {
+        let tf = TestFramework::new("1");
+        let cg = code_gen(&tf.sym_table);
+        let expr = ExpressionGenerator::new(&tf.scanner, &tf.sym_table, &cg);
+        assert!(matches!(expr.type_compatibility(PrimType::Int, PrimType::Int, false),
+                         Compatibility::Compatible(PrimType::Int)));
+    }
+
+    #[test]
+    fn type_compatibility_widen_left() {
+        let tf = TestFramework::new("1");
+        let cg = code_gen(&tf.sym_table);
+        let expr = ExpressionGenerator::new(&tf.scanner, &tf.sym_table, &cg);
+        assert!(matches!(expr.type_compatibility(PrimType::Char, PrimType::Int, false),
+                         Compatibility::WidenLeft(PrimType::Int)));
+    }
+
+    #[test]
+    fn type_compatibility_widen_right() {
+        let tf = TestFramework::new("1");
+        let cg = code_gen(&tf.sym_table);
+        let expr = ExpressionGenerator::new(&tf.scanner, &tf.sym_table, &cg);
+        assert!(matches!(expr.type_compatibility(PrimType::Int, PrimType::Char, false),
+                         Compatibility::WidenRight(PrimType::Int)));
+    }
+
+    #[test]
+    fn type_compatibility_only_right_blocks_widen() {
+        let tf = TestFramework::new("1");
+        let cg = code_gen(&tf.sym_table);
+        let expr = ExpressionGenerator::new(&tf.scanner, &tf.sym_table, &cg);
+        assert!(matches!(expr.type_compatibility(PrimType::Int, PrimType::Char, true),
+                         Compatibility::Incompatible));
+    }
+
+    #[test]
+    fn type_compatibility_void_incompatible() {
+        let tf = TestFramework::new("1");
+        let cg = code_gen(&tf.sym_table);
+        let expr = ExpressionGenerator::new(&tf.scanner, &tf.sym_table, &cg);
+        assert!(matches!(expr.type_compatibility(PrimType::Void, PrimType::Int, false),
+                         Compatibility::Incompatible));
+    }
+
+    #[test]
+    fn type_compatibility_same_size() {
+        let tf = TestFramework::new("1");
+        let cg = code_gen(&tf.sym_table);
+        let expr = ExpressionGenerator::new(&tf.scanner, &tf.sym_table, &cg);
+        assert!(matches!(expr.type_compatibility(PrimType::Long, PrimType::LongPtr, false),
+                         Compatibility::Compatible(PrimType::Long)));
+    }
+
+    // --- enter/exit function ---
+
+    #[test]
+    fn enter_exit_function_tracks_context() {
+        let scanner = scanner_from("1");
+        let sym_table = SymbolTable::new();
+        sym_table.add_glob_fn("main", PrimType::Int);
+        let cg = code_gen(&sym_table);
+        let expr = ExpressionGenerator::new(&scanner, &sym_table, &cg);
+        expr.enter_function("main");
+        assert_eq!(expr.current_function_type(), PrimType::Int);
+        assert_eq!(expr.current_function_name(), "main");
+        expr.exit_function();
+    }
+
+    // --- primary with function call ---
+
+    #[test]
+    fn primary_function_call() {
+        let scanner = scanner_from("foo(42)");
+        let sym_table = SymbolTable::new();
+        sym_table.add_glob_fn("foo", PrimType::Int);
+        let cg = code_gen(&sym_table);
+        let expr = ExpressionGenerator::new(&scanner, &sym_table, &cg);
+        let node = expr.primary().unwrap();
+        assert!(matches!(node, AstNode::FuncCall { .. }));
+        assert_eq!(node.get_type(), Some(PrimType::Int));
+    }
+
+    // --- primary with ident variable ---
+
+    #[test]
+    fn primary_ident_variable() {
+        // must have trailing token so maybe_token(LeftParen) doesn't hit EOF
+        let scanner = scanner_from("x;");
+        let sym_table = SymbolTable::new();
+        sym_table.add_glob("x", PrimType::Int, StructuralType::Variable);
+        let cg = code_gen(&sym_table);
+        let expr = ExpressionGenerator::new(&scanner, &sym_table, &cg);
+        let node = expr.primary().unwrap();
+        assert!(matches!(node, AstNode::Ident { .. }));
+        assert_eq!(node.get_type(), Some(PrimType::Int));
+    }
+
+    // --- prefix with & and * ---
+
+    #[test]
+    fn prefix_amper_creates_addr() {
+        // trailing token prevents maybe_token(LeftParen) from hitting EOF
+        let scanner = scanner_from("&x;");
+        let sym_table = SymbolTable::new();
+        sym_table.add_glob("x", PrimType::Int, StructuralType::Variable);
+        let cg = code_gen(&sym_table);
+        let expr = ExpressionGenerator::new(&scanner, &sym_table, &cg);
+        let node = expr.binexpr(0).unwrap();
+        assert!(matches!(node, AstNode::Addr { .. }));
+        assert_eq!(node.get_type(), Some(PrimType::IntPtr));
+    }
+
+    #[test]
+    fn prefix_star_creates_deref() {
+        // trailing token prevents maybe_token(LeftParen) from hitting EOF
+        let scanner = scanner_from("*x;");
+        let sym_table = SymbolTable::new();
+        sym_table.add_glob("x", PrimType::IntPtr, StructuralType::Variable);
+        let cg = code_gen(&sym_table);
+        let expr = ExpressionGenerator::new(&scanner, &sym_table, &cg);
+        let node = expr.binexpr(0).unwrap();
+        assert!(matches!(node, AstNode::Deref { .. }));
+        assert_eq!(node.get_type(), Some(PrimType::Int));
     }
 }

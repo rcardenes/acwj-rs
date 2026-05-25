@@ -16,6 +16,32 @@ pub enum PrimType {
     Int,
     Long,
     Void,
+    CharPtr,
+    IntPtr,
+    LongPtr,
+    VoidPtr,
+}
+
+impl PrimType {
+    pub fn pointer_to(&self) -> PrimType {
+        match self {
+            PrimType::Char => PrimType::CharPtr,
+            PrimType::Int => PrimType::IntPtr,
+            PrimType::Long => PrimType::LongPtr,
+            PrimType::Void => PrimType::VoidPtr,
+            _ => panic!("Unrecognized in pointer_to: {self:?}")
+        }
+    }
+
+    pub fn value_at(&self) -> PrimType {
+        match self {
+            PrimType::CharPtr => PrimType::Char,
+            PrimType::IntPtr => PrimType::Int,
+            PrimType::LongPtr => PrimType::Long,
+            PrimType::VoidPtr => PrimType::Void,
+            _ => panic!("Unrecognized in value_at: {self:?}")
+        }
+    }
 }
 
 impl From<Token> for PrimType {
@@ -32,7 +58,7 @@ impl From<Token> for PrimType {
                 |Token::Assign|Token::Ident(_)|Token::IntLit(_)
                 |Token::LeftBrace|Token::RightBrace|Token::LeftParen|Token::RightParen 
                 |Token::If|Token::Else|Token::For|Token::While
-                |Token::Semi|Token::Return
+                |Token::Semi|Token::Return|Token::Amper|Token::LogAnd
                 // TODO: This needs to provide at least a line number
                 => panic!("No type for token {:?}", tok)
         }
@@ -265,5 +291,193 @@ mod tests {
 
         let names = symbols.iter_global_vars().map(|se| se.name.clone()).collect::<Vec<_>>();
         assert_eq!(names, vec!["foo", "bar"]);
+    }
+
+    // --- PrimType::pointer_to ---
+
+    #[test]
+    fn pointer_to_char_returns_charptr() {
+        assert_eq!(PrimType::Char.pointer_to(), PrimType::CharPtr);
+    }
+
+    #[test]
+    fn pointer_to_int_returns_intptr() {
+        assert_eq!(PrimType::Int.pointer_to(), PrimType::IntPtr);
+    }
+
+    #[test]
+    fn pointer_to_long_returns_longptr() {
+        assert_eq!(PrimType::Long.pointer_to(), PrimType::LongPtr);
+    }
+
+    #[test]
+    fn pointer_to_void_returns_voidptr() {
+        assert_eq!(PrimType::Void.pointer_to(), PrimType::VoidPtr);
+    }
+
+    #[test]
+    #[should_panic(expected = "Unrecognized in pointer_to")]
+    fn pointer_to_pointer_panics() {
+        PrimType::CharPtr.pointer_to();
+    }
+
+    // --- PrimType::value_at ---
+
+    #[test]
+    fn value_at_charptr_returns_char() {
+        assert_eq!(PrimType::CharPtr.value_at(), PrimType::Char);
+    }
+
+    #[test]
+    fn value_at_intptr_returns_int() {
+        assert_eq!(PrimType::IntPtr.value_at(), PrimType::Int);
+    }
+
+    #[test]
+    fn value_at_longptr_returns_long() {
+        assert_eq!(PrimType::LongPtr.value_at(), PrimType::Long);
+    }
+
+    #[test]
+    fn value_at_voidptr_returns_void() {
+        assert_eq!(PrimType::VoidPtr.value_at(), PrimType::Void);
+    }
+
+    #[test]
+    #[should_panic(expected = "Unrecognized in value_at")]
+    fn value_at_non_pointer_panics() {
+        PrimType::Char.value_at();
+    }
+
+    // --- PrimType::from(Token) ---
+
+    #[test]
+    fn prim_from_char_token() {
+        assert_eq!(PrimType::from(Token::Char), PrimType::Char);
+    }
+
+    #[test]
+    fn prim_from_int_token() {
+        assert_eq!(PrimType::from(Token::Int), PrimType::Int);
+    }
+
+    #[test]
+    fn prim_from_long_token() {
+        assert_eq!(PrimType::from(Token::Long), PrimType::Long);
+    }
+
+    #[test]
+    fn prim_from_void_token() {
+        assert_eq!(PrimType::from(Token::Void), PrimType::Void);
+    }
+
+    #[test]
+    #[should_panic(expected = "No type for token")]
+    fn prim_from_non_type_token_panics() {
+        let _: PrimType = Token::Semi.into();
+    }
+
+    // --- SymbolTable function label/type operations ---
+
+    #[test]
+    fn set_and_get_fn_end_label() {
+        let symbols = SymbolTable::new();
+        symbols.add_glob_fn("foo", PrimType::Int);
+        symbols.set_fn_end_label("foo", 42);
+        assert_eq!(symbols.get_fn_end_label("foo"), 42);
+    }
+
+    #[test]
+    #[should_panic(expected = "undefined symbol")]
+    fn set_fn_end_label_undefined_panics() {
+        let symbols = SymbolTable::new();
+        symbols.set_fn_end_label("foo", 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "already has one")]
+    fn set_fn_end_label_already_set_panics() {
+        let symbols = SymbolTable::new();
+        symbols.add_glob_fn("foo", PrimType::Int);
+        symbols.set_fn_end_label("foo", 1);
+        symbols.set_fn_end_label("foo", 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "non-function symbol")]
+    fn set_fn_end_label_non_function_panics() {
+        let symbols = SymbolTable::new();
+        symbols.add_glob("x", PrimType::Int, StructuralType::Variable);
+        symbols.set_fn_end_label("x", 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "which has none")]
+    fn get_fn_end_label_none_panics() {
+        let symbols = SymbolTable::new();
+        symbols.add_glob_fn("foo", PrimType::Int);
+        let _ = symbols.get_fn_end_label("foo");
+    }
+
+    #[test]
+    #[should_panic(expected = "non-function symbol")]
+    fn get_fn_end_label_non_function_panics() {
+        let symbols = SymbolTable::new();
+        symbols.add_glob("x", PrimType::Int, StructuralType::Variable);
+        let _ = symbols.get_fn_end_label("x");
+    }
+
+    #[test]
+    #[should_panic(expected = "undefined symbol")]
+    fn get_fn_end_label_undefined_panics() {
+        let symbols = SymbolTable::new();
+        let _ = symbols.get_fn_end_label("foo");
+    }
+
+    #[test]
+    fn get_fn_dtype_returns_type() {
+        let symbols = SymbolTable::new();
+        symbols.add_glob_fn("foo", PrimType::Int);
+        assert_eq!(symbols.get_fn_dtype("foo"), PrimType::Int);
+    }
+
+    #[test]
+    #[should_panic(expected = "non-function symbol")]
+    fn get_fn_dtype_non_function_panics() {
+        let symbols = SymbolTable::new();
+        symbols.add_glob("x", PrimType::Int, StructuralType::Variable);
+        let _ = symbols.get_fn_dtype("x");
+    }
+
+    #[test]
+    #[should_panic(expected = "undefined symbol")]
+    fn get_fn_dtype_undefined_panics() {
+        let symbols = SymbolTable::new();
+        let _ = symbols.get_fn_dtype("foo");
+    }
+
+    #[test]
+    fn builder_add_glob_fn_creates_function() {
+        let st = SymbolTableBuilder::new()
+            .add_glob_fn("main", PrimType::Int)
+            .build();
+        assert_eq!(st.len(), 1);
+        let entry = st.find_glob("main").unwrap();
+        assert!(matches!(entry.stype, StructuralType::Function { .. }));
+        assert_eq!(entry.dtype, PrimType::Int);
+    }
+
+    #[test]
+    fn is_empty_on_new_table() {
+        let symbols = SymbolTable::new();
+        assert!(symbols.is_empty());
+    }
+
+    #[test]
+    fn add_glob_fn_adds_function() {
+        let symbols = SymbolTable::new();
+        symbols.add_glob_fn("foo", PrimType::Void);
+        assert!(symbols.has_global("foo"));
+        assert_eq!(symbols.len(), 1);
     }
 }

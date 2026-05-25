@@ -32,6 +32,11 @@ for_statement: 'for' '(' preop_statement ';'
 preop_statement:  statement  ;        (for now)
 postop_statement: statement  ;        (for now)
 
+prefix_expression: primary
+      |            '*' prefix_expression
+      |            '&' prefix_expression
+      ;
+
 function_declaration: 'void' identifier '(' ')' compound_statement   ;
 
 function_call: identifier '(' expression ')' ;

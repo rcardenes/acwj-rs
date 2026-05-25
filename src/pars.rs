@@ -42,8 +42,12 @@ where T: std::io::Read,
     }
 
     fn var_declaration(&self, type_token: Token) -> Result<AstNode> {
-        let dtype = PrimType::from(type_token);
-        let ident = self.scanner.ident();
+        let mut dtype = PrimType::from(type_token);
+        while self.scanner.maybe_token(Token::Star) {
+            dtype = dtype.pointer_to();
+        }
+
+        let ident = self.scanner.ident(None);
 
         self.symbols.add_glob(&ident, dtype, StructuralType::Variable);
 
@@ -137,7 +141,7 @@ where T: std::io::Read,
             }
 
             let ftype: PrimType = t.into();
-            let ident = self.scanner.ident();
+            let ident = self.scanner.ident(None);
             let name = AstNode::make_ident(&ident, ftype);
             self.symbols.add_glob_fn(&ident, ftype);
             self.scanner.lparen();
@@ -222,8 +226,9 @@ where T: std::io::Read,
                 |t @ Token::GT
                 |t @ Token::GE
                 |t @ Token::LT
-                |t @ Token::LE)
-                => {
+                |t @ Token::LE
+                |t @ Token::LogAnd) =>
+            {
                 bail!("Found operator {:?} while expecting a statement, at line {}", t, self.scanner.get_line())
             },
             Some(Token::IntLit(_)) => {
@@ -234,7 +239,8 @@ where T: std::io::Read,
             Some(Token::Semi) => panic!("Expected statement, found ';'"),
             // Only for function declarations right now
             Some(Token::Void) => panic!("Expected statement, found 'void'"),
-            None => { panic!("EOF found while expecting a statement") }
+            Some(Token::Amper) => panic!("Expected statement, found '&'"),
+            None => { panic!("EOF found while expecting a statement") },
         }
     }
 
@@ -521,6 +527,86 @@ mod tests {
         let code_gen = codegen_from(&symbols);
         let parser = Parser::new(&scanner, &symbols, &code_gen);
         let _ = parser.compound_statement();
+    }
+
+    // --- var_declaration with pointer types ---
+
+    #[test]
+    fn var_declaration_ptr() {
+        let (scanner, symbols) = parser_from("{ int *x; }");
+        let code_gen = codegen_from(&symbols);
+        let parser = Parser::new(&scanner, &symbols, &code_gen);
+        let tree = parser.compound_statement().expect("parse failed");
+        assert_eq!(tree, AstNode::make_global_declaration("x", PrimType::IntPtr));
+    }
+
+    #[test]
+    fn var_declaration_char_ptr() {
+        let (scanner, symbols) = parser_from("{ char *c; }");
+        let code_gen = codegen_from(&symbols);
+        let parser = Parser::new(&scanner, &symbols, &code_gen);
+        let tree = parser.compound_statement().expect("parse failed");
+        assert_eq!(tree, AstNode::make_global_declaration("c", PrimType::CharPtr));
+    }
+
+    // --- function_declaration with non-void return ---
+
+    #[test]
+    fn function_declaration_with_return_statement() {
+        let (scanner, symbols) = parser_from("int foo() { return(42); }");
+        let code_gen = codegen_from(&symbols);
+        let parser = Parser::new(&scanner, &symbols, &code_gen);
+        let result = parser.function_declaration().expect("parse failed");
+        assert!(result.is_some());
+    }
+
+    #[test]
+    #[should_panic(expected = "No return for function with non-void type")]
+    fn function_declaration_non_void_no_return_panics() {
+        let (scanner, symbols) = parser_from("int foo() {}");
+        let code_gen = codegen_from(&symbols);
+        let parser = Parser::new(&scanner, &symbols, &code_gen);
+        let _ = parser.function_declaration();
+    }
+
+    #[test]
+    #[should_panic(expected = "Incompatible return type")]
+    fn return_incompatible_type_panics() {
+        // type_compatibility(Long, Int, true) → Incompatible (Long larger than Int, only_right=true)
+        let (scanner, symbols) = parser_from("int foo() { return(x); }");
+        symbols.add_glob("x", PrimType::Long, StructuralType::Variable);
+        let code_gen = codegen_from(&symbols);
+        let parser = Parser::new(&scanner, &symbols, &code_gen);
+        let _ = parser.function_declaration();
+    }
+
+    // --- single_statement remaining error paths ---
+
+    #[test]
+    #[should_panic(expected = "Expected statement, found ';'")]
+    fn single_statement_semi_panics() {
+        let (scanner, symbols) = parser_from(";");
+        let code_gen = codegen_from(&symbols);
+        let parser = Parser::new(&scanner, &symbols, &code_gen);
+        let _ = parser.single_statement();
+    }
+
+    #[test]
+    #[should_panic(expected = "Expected statement, found 'void'")]
+    fn single_statement_void_panics() {
+        let (scanner, symbols) = parser_from("void");
+        let code_gen = codegen_from(&symbols);
+        let parser = Parser::new(&scanner, &symbols, &code_gen);
+        let _ = parser.single_statement();
+    }
+
+    #[test]
+    #[should_panic(expected = "Expected statement, found '&'")]
+    fn single_statement_amper_panics() {
+        let (scanner, symbols) = parser_from("&");
+        let code_gen = codegen_from(&symbols);
+        let parser = Parser::new(&scanner, &symbols, &code_gen);
+        let _ = parser.single_statement();
     }
 }
 

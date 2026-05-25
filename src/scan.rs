@@ -10,6 +10,7 @@ pub static TEXTLEN: usize = 512; // Maximum lenght of symbols in input
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token {
+    Amper,         // &
     Plus,          // +
     Minus,         // -
     Star,          // *
@@ -21,6 +22,7 @@ pub enum Token {
     GT,            // >
     LE,            // <=
     GE,            // >=
+    LogAnd,        // &&
     Ident(String), // identifier
     LeftBrace,     // {
     RightBrace,    // }
@@ -150,6 +152,14 @@ where T: Read
                         },
                         Some(c) => self.fatal_extra("Unrecognised character", c),
                         None => self.fatal("Found EOF while parsing expression")
+                    }
+                },
+                '&' => {
+                    if let Some('&') = self.peek() {
+                        self.clear_putback_char();
+                        Some(Token::LogAnd)
+                    } else {
+                        Some(Token::Amper)
                     }
                 },
                 c if c.is_ascii_digit() => {
@@ -296,8 +306,9 @@ where T: Read
         }
     }
 
-    pub fn ident(&self) -> String {
-        let res = self.if_not_eof_matches(|tok| matches!(tok, &Token::Ident(_)), "identifier");
+    pub fn ident(&self, expected_string: Option<&str>) -> String {
+        let exp = expected_string.unwrap_or("identifier");
+        let res = self.if_not_eof_matches(|tok| matches!(tok, &Token::Ident(_)), exp);
         match res {
             Some(Token::Ident(name)) => name,
             None => panic!("End of input while expecting an identifier"),
@@ -612,7 +623,7 @@ mod tests {
     #[test]
     fn ident_returns_identifier_name() {
         let scanner = Scanner::new(Cursor::new(b"foo".to_vec()));
-        assert_eq!(scanner.ident(), "foo");
+        assert_eq!(scanner.ident(None), "foo");
     }
 
     #[test]

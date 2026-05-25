@@ -34,7 +34,7 @@ fn compile<T, B>(scanner: &Scanner<T>, symbols: &SymbolTable, code_gen: &mut Cod
           B: CodeBackend,
 {
 
-    let parser = Parser::new(&scanner, &symbols, &code_gen);
+    let parser = Parser::new(scanner, symbols, code_gen);
 
     // Generate AST
     let mut functions = vec![];
@@ -48,6 +48,7 @@ fn compile<T, B>(scanner: &Scanner<T>, symbols: &SymbolTable, code_gen: &mut Cod
     for tree in functions {
         code_gen.gen_ast(&tree, None, None, 0)?;
     }
+    code_gen.gen_postamble()?;
 
     Ok(())
 }

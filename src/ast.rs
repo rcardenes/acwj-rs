@@ -25,6 +25,8 @@ pub enum AstNode {
 
     // Unary operations
     FuncCall { id: Identifier, dtype: PrimType, left: Box<AstNode> },
+    Addr { id: Identifier, dtype: PrimType },
+    Deref { inner: Box<AstNode>, dtype: PrimType },
 
     // Binary operations
     //   -- arithmetic
@@ -78,19 +80,21 @@ impl AstNode {
     pub fn get_type(&self) -> Option<PrimType> {
         match self {
             AstNode::IntLit { dtype, .. }
-                | AstNode::Ident { dtype, .. }
-                | AstNode::LvIdent { dtype, .. }
-                | AstNode::Add { dtype, .. }
-                | AstNode::Subtract { dtype, .. }
-                | AstNode::Multiply { dtype, .. }
-                | AstNode::Divide { dtype, .. }
-                | AstNode::Equal { dtype, .. }
-                | AstNode::NotEqual { dtype, .. }
-                | AstNode::LessThan { dtype, .. }
-                | AstNode::GreaterThan { dtype, .. }
-                | AstNode::LessThanOrEqual { dtype, .. }
-                | AstNode::GreaterThanOrEqual { dtype, .. }
-                | AstNode::FuncCall { dtype, .. }
+            | AstNode::Ident { dtype, .. }
+            | AstNode::LvIdent { dtype, .. }
+            | AstNode::Add { dtype, .. }
+            | AstNode::Subtract { dtype, .. }
+            | AstNode::Multiply { dtype, .. }
+            | AstNode::Divide { dtype, .. }
+            | AstNode::Equal { dtype, .. }
+            | AstNode::NotEqual { dtype, .. }
+            | AstNode::LessThan { dtype, .. }
+            | AstNode::GreaterThan { dtype, .. }
+            | AstNode::LessThanOrEqual { dtype, .. }
+            | AstNode::GreaterThanOrEqual { dtype, .. }
+            | AstNode::FuncCall { dtype, .. }
+            | AstNode::Addr { dtype, .. }
+            | AstNode::Deref { dtype, .. }
             => Some(*dtype),
             _ => None,
         }
@@ -235,6 +239,25 @@ impl AstNode {
 
     pub fn make_return(name: &str, expr: AstNode) -> AstNode {
         AstNode::Return { id: Identifier::new(name), expr: Box::new(expr), }
+    }
+
+    pub fn into_pointer(self, errmsg: &str) -> AstNode {
+        match self {
+            AstNode::Ident { id, dtype } => {
+                AstNode::Addr { id, dtype: dtype.pointer_to() }
+            },
+            _ => panic!("{}", errmsg)
+        }
+    }
+
+    pub fn make_deref(self, errmsg: &str) -> AstNode {
+        match self {
+            AstNode::Ident { dtype, .. } |
+            AstNode::Deref { dtype, .. } => {
+                AstNode::Deref { inner: Box::new(self), dtype: dtype.value_at() }
+            },
+            _ => panic!("{}", errmsg)
+        }
     }
 }
 
@@ -463,5 +486,147 @@ mod tests {
     fn ast_node_partial_eq() {
         assert_eq!(AstNode::make_intlit(3, PrimType::Int), AstNode::make_intlit(3, PrimType::Int));
         assert_ne!(AstNode::make_intlit(3, PrimType::Int), AstNode::make_intlit(4, PrimType::Int));
+    }
+
+    // --- make_function_call ---
+
+    #[test]
+    fn make_function_call_creates_funccall() {
+        let node = AstNode::make_function_call("foo", AstNode::make_intlit(42, PrimType::Int), PrimType::Void);
+        assert!(matches!(&node, AstNode::FuncCall { id, dtype: PrimType::Void, .. } if id.name == "foo"));
+    }
+
+    // --- make_return ---
+
+    #[test]
+    fn make_return_creates_return_node() {
+        let node = AstNode::make_return("foo", AstNode::make_intlit(7, PrimType::Int));
+        assert!(matches!(&node, AstNode::Return { id, expr } if id.name == "foo"));
+    }
+
+    // --- into_pointer ---
+
+    #[test]
+    fn into_pointer_ident_creates_addr() {
+        let id = AstNode::make_ident("x", PrimType::Int);
+        let addr = id.into_pointer("err");
+        assert!(matches!(&addr, AstNode::Addr { id: Identifier { name }, dtype: PrimType::IntPtr } if name == "x"));
+    }
+
+    #[test]
+    #[should_panic(expected = "err")]
+    fn into_pointer_non_ident_panics() {
+        AstNode::make_intlit(1, PrimType::Int).into_pointer("err");
+    }
+
+    // --- make_deref ---
+
+    #[test]
+    fn make_deref_ident_creates_deref() {
+        let id = AstNode::make_ident("p", PrimType::IntPtr);
+        let deref = id.make_deref("err");
+        assert!(matches!(&deref, AstNode::Deref { dtype: PrimType::Int, .. }));
+    }
+
+    #[test]
+    #[should_panic(expected = "Unrecognized in value_at")]
+    fn make_deref_on_non_pointer_deref_panics() {
+        let id = AstNode::make_ident("p", PrimType::IntPtr);
+        let deref = id.make_deref("err"); // Deref with dtype=Int
+        deref.make_deref("err"); // Int.value_at() panics
+    }
+
+    #[test]
+    #[should_panic(expected = "err")]
+    fn make_deref_non_ident_panics() {
+        AstNode::make_intlit(1, PrimType::Int).make_deref("err");
+    }
+
+    // --- new_type ---
+
+    #[test]
+    fn new_type_intlit_changes_type() {
+        let node = AstNode::make_intlit(42, PrimType::Char).new_type(PrimType::Long);
+        assert_eq!(node.get_type(), Some(PrimType::Long));
+    }
+
+    #[test]
+    fn new_type_ident_changes_type() {
+        let node = AstNode::make_ident("x", PrimType::Char).new_type(PrimType::Int);
+        assert_eq!(node.get_type(), Some(PrimType::Int));
+    }
+
+    #[test]
+    fn new_type_binary_changes_type() {
+        let node = AstNode::make_binary(Token::Plus, AstNode::make_intlit(1, PrimType::Char), AstNode::make_intlit(2, PrimType::Int), PrimType::Char).new_type(PrimType::Int);
+        assert_eq!(node.get_type(), Some(PrimType::Int));
+    }
+
+    #[test]
+    #[should_panic(expected = "Can't change type")]
+    fn new_type_panics_on_empty() {
+        AstNode::Empty.new_type(PrimType::Int);
+    }
+
+    // --- get_type for variants not explicitly tested ---
+
+    #[test]
+    fn get_type_addr_returns_type() {
+        let id = AstNode::make_ident("x", PrimType::Int);
+        let addr = id.into_pointer("err");
+        assert_eq!(addr.get_type(), Some(PrimType::IntPtr));
+    }
+
+    #[test]
+    fn get_type_deref_returns_type() {
+        let id = AstNode::make_ident("p", PrimType::IntPtr);
+        let deref = id.make_deref("err");
+        assert_eq!(deref.get_type(), Some(PrimType::Int));
+    }
+
+    #[test]
+    fn get_type_funccall_returns_type() {
+        let node = AstNode::make_function_call("foo", AstNode::make_intlit(1, PrimType::Int), PrimType::Void);
+        assert_eq!(node.get_type(), Some(PrimType::Void));
+    }
+
+    #[test]
+    fn get_type_empty_returns_none() {
+        assert_eq!(AstNode::Empty.get_type(), None);
+    }
+
+    #[test]
+    fn get_type_function_returns_none() {
+        assert_eq!(AstNode::make_function(AstNode::make_ident("f", PrimType::Void), AstNode::Empty).get_type(), None);
+    }
+
+    #[test]
+    fn get_type_assign_returns_none() {
+        assert_eq!(AstNode::make_assign(AstNode::make_lvident("x", PrimType::Int), AstNode::make_intlit(5, PrimType::Int)).get_type(), None);
+    }
+
+    #[test]
+    fn get_type_if_returns_none() {
+        assert_eq!(AstNode::make_if(AstNode::make_intlit(1, PrimType::Int), AstNode::Empty, None).get_type(), None);
+    }
+
+    #[test]
+    fn get_type_while_returns_none() {
+        assert_eq!(AstNode::make_while(AstNode::make_intlit(1, PrimType::Int), AstNode::Empty).get_type(), None);
+    }
+
+    #[test]
+    fn get_type_glue_returns_none() {
+        assert_eq!(AstNode::make_glue(AstNode::Empty, AstNode::Empty).get_type(), None);
+    }
+
+    #[test]
+    fn get_type_return_returns_none() {
+        assert_eq!(AstNode::make_return("f", AstNode::make_intlit(1, PrimType::Int)).get_type(), None);
+    }
+
+    #[test]
+    fn get_type_globaldec_returns_none() {
+        assert_eq!(AstNode::make_global_declaration("x", PrimType::Int).get_type(), None);
     }
 }

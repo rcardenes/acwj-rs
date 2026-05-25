@@ -7,7 +7,7 @@ use anyhow::Result;
 use crate::{
     ast::AstNode,
     cgen::CodeBackend,
-    sym::PrimType,
+    sym::{PrimType, SymFilteredIterator},
 };
 
 static FUNC_PREAMBLE: &str = "
@@ -126,8 +126,8 @@ fn ast_to_set_op(op: &AstNode) -> &'static str {
 pub struct X86_64Backend<T>
     where T: Write
 {
-    pub(crate) output: T,
-    pub(crate) reg_status: HashMap<X86_64Reg, bool>,
+    output: T,
+    reg_status: HashMap<X86_64Reg, bool>,
 }
 
 impl<T> X86_64Backend<T>
@@ -143,6 +143,10 @@ impl<T> X86_64Backend<T>
                            (X86_64Reg::R10, true),
                            (X86_64Reg::R11, true)]),
         }
+    }
+
+    pub fn into_output(self) -> T {
+        self.output
     }
 
     fn free_register(&mut self, reg: X86_64Reg) {
@@ -191,6 +195,11 @@ impl<T> CodeBackend for X86_64Backend<T>
         Ok(())
     }
 
+    fn postamble(&mut self, _: SymFilteredIterator) -> Result<()> {
+        // Nothing for the postamble in X86 arch
+        Ok(())
+    }
+
     fn func_preamble(&mut self, ident: &str) -> Result<()> {
         let preamble = FUNC_PREAMBLE.replace("{name}", ident);
         write!(self, "{}", preamble)?;
@@ -214,11 +223,14 @@ impl<T> CodeBackend for X86_64Backend<T>
         // Get a new register
         let reg = self.alloc_register();
 
-//        writeln!(self, "# load_glob({ident}, {dtype:?})")?;
         match dtype {
-            PrimType::Char => writeln!(self, "\tmovzbq\t{}(%rip), {}", ident, reg.as_8b())?,
+            PrimType::Char => writeln!(self, "\tmovzbq\t{}(%rip), {}", ident, reg)?,
             PrimType::Int => writeln!(self, "\tmovzbl\t{}(%rip), {}", ident, reg.as_32b())?,
-            PrimType::Long => writeln!(self, "\tmovq\t{}(%rip), {}", ident, reg)?,
+            PrimType::Long
+            | PrimType::CharPtr
+            | PrimType::IntPtr
+            | PrimType::LongPtr
+            | PrimType::VoidPtr => writeln!(self, "\tmovq\t{}(%rip), {}", ident, reg)?,
             PrimType::Void => unreachable!("Bad type in load_glob: {dtype:?}"),
         }
 
@@ -226,11 +238,14 @@ impl<T> CodeBackend for X86_64Backend<T>
     }
 
     fn store_glob(&mut self, r: Self::Reg, ident: &str, dtype: PrimType) -> Result<Self::Reg> {
-//        writeln!(self, "# store_glob({r:?}, {ident}, {dtype:?})")?;
         match dtype {
             PrimType::Char => writeln!(self, "\tmovb\t{}, {}(%rip)", r.as_8b(), ident)?,
             PrimType::Int => writeln!(self, "\tmovl\t{}, {}(%rip)", r.as_32b(), ident)?,
-            PrimType::Long => writeln!(self, "\tmovq\t{}, {}(%rip)", r, ident)?,
+            PrimType::Long
+            | PrimType::CharPtr
+            | PrimType::IntPtr
+            | PrimType::LongPtr
+            | PrimType::VoidPtr => writeln!(self, "\tmovq\t{}, {}(%rip)", r, ident)?,
             PrimType::Void => unreachable!("Can't generate store_glob for void types!"),
         }
 
@@ -304,7 +319,11 @@ impl<T> CodeBackend for X86_64Backend<T>
         match dtype {
             PrimType::Char => 1,
             PrimType::Int => 4,
-            PrimType::Long => 8,
+            PrimType::Long
+            | PrimType::CharPtr
+            | PrimType::IntPtr
+            | PrimType::LongPtr
+            | PrimType::VoidPtr => 8,
             PrimType::Void => 0,
         }
     }
@@ -321,11 +340,34 @@ impl<T> CodeBackend for X86_64Backend<T>
         match dtype {
             PrimType::Char => writeln!(self, "\tmovzbl\t{}, %eax", r.as_8b())?,
             PrimType::Int => writeln!(self, "\tmovl\t{}, %eax", r.as_32b())?,
-            PrimType::Long => writeln!(self, "\tmovq\t{}, %eax", r)?,
+            PrimType::Long
+            | PrimType::CharPtr
+            | PrimType::IntPtr
+            | PrimType::LongPtr
+            | PrimType::VoidPtr => writeln!(self, "\tmovq\t{}, %eax", r)?,
             PrimType::Void => panic!("Bad function type in code backend ret: Void")
         }
 
         self.jump(label_num)
+    }
+
+    fn address(&mut self, id: &str) -> Result<Option<Self::Reg>> {
+        let reg = self.alloc_register();
+
+        writeln!(self, "\tleaq\t{}(%rip), {}", id, reg)?;
+
+        Ok(Some(reg))
+    }
+
+    fn deref(&mut self, r: Self::Reg, dtype: PrimType) -> Result<Option<Self::Reg>> {
+        match dtype {
+            PrimType::CharPtr => writeln!(self, "\tmovsbq\t({}), {}", r, r)?,
+            PrimType::IntPtr => writeln!(self, "\tmovslq\t({}), {}", r, r)?,
+            PrimType::LongPtr => writeln!(self, "\tmovq\t({r}), {r}")?,
+            _ => panic!("Trying to deref illegal type: {:?}", dtype)
+        }
+
+        Ok(Some(r))
     }
 }
 
@@ -518,19 +560,19 @@ mod tests {
     #[rstest]
     fn glob_sym_long(mut backend: Backend) {
         backend.glob_sym("l", PrimType::Long).unwrap();
-        assert_eq!(output_string(&backend), ".global l\nl:\n\t.zero 8\n");
+        assert_eq!(output_string(&backend), "l:\n\t.zero 8\n");
     }
 
     #[rstest]
     fn glob_sym_int(mut backend: Backend) {
         backend.glob_sym("x", PrimType::Int).unwrap();
-        assert_eq!(output_string(&backend), ".global x\nx:\n\t.zero 4\n");
+        assert_eq!(output_string(&backend), "x:\n\t.zero 4\n");
     }
 
     #[rstest]
     fn glob_sym_char(mut backend: Backend) {
         backend.glob_sym("c", PrimType::Char).unwrap();
-        assert_eq!(output_string(&backend), ".global c\nc:\n\t.zero 1\n");
+        assert_eq!(output_string(&backend), "c:\n\t.zero 1\n");
     }
 
     #[rstest]
@@ -734,5 +776,161 @@ mod tests {
         assert!(matches!(X86_64Reg::R9.as_8b(), X86_64Reg8b::R9));
         assert!(matches!(X86_64Reg::R10.as_8b(), X86_64Reg8b::R10));
         assert!(matches!(X86_64Reg::R11.as_8b(), X86_64Reg8b::R11));
+    }
+
+    // === address ===
+
+    #[rstest]
+    fn address_emits_leaq(mut backend: Backend) {
+        let reg = backend.address("x").unwrap();
+        assert!(reg.is_some());
+        assert!(output_string(&backend).contains("leaq\tx(%rip),"));
+    }
+
+    // === deref ===
+
+    #[rstest]
+    fn deref_charptr_emits_movsbq(mut backend: Backend) {
+        let r = backend.alloc_register();
+        let result = backend.deref(r, PrimType::CharPtr).unwrap();
+        assert_eq!(result, Some(r));
+        assert!(output_string(&backend).contains("movsbq"));
+    }
+
+    #[rstest]
+    fn deref_intptr_emits_movslq(mut backend: Backend) {
+        let r = backend.alloc_register();
+        let result = backend.deref(r, PrimType::IntPtr).unwrap();
+        assert_eq!(result, Some(r));
+        assert!(output_string(&backend).contains("movslq"));
+    }
+
+    #[rstest]
+    fn deref_longptr_emits_movq(mut backend: Backend) {
+        let r = backend.alloc_register();
+        let result = backend.deref(r, PrimType::LongPtr).unwrap();
+        assert_eq!(result, Some(r));
+        assert!(output_string(&backend).contains("movq\t("));
+    }
+
+    #[rstest]
+    #[should_panic(expected = "Trying to deref illegal type")]
+    fn deref_voidptr_panics(mut backend: Backend) {
+        let r = backend.alloc_register();
+        backend.deref(r, PrimType::VoidPtr).unwrap();
+    }
+
+    // === ret with different types ===
+
+    #[rstest]
+    fn ret_char_uses_movzbl(mut backend: Backend) {
+        let r = backend.alloc_register();
+        backend.ret(r, PrimType::Char, 3).unwrap();
+        assert!(output_string(&backend).contains("movzbl"));
+    }
+
+    #[rstest]
+    fn ret_int_uses_movl(mut backend: Backend) {
+        let r = backend.alloc_register();
+        backend.ret(r, PrimType::Int, 3).unwrap();
+        assert!(output_string(&backend).contains("movl"));
+    }
+
+    #[rstest]
+    fn ret_long_uses_movq(mut backend: Backend) {
+        let r = backend.alloc_register();
+        backend.ret(r, PrimType::Long, 3).unwrap();
+        assert!(output_string(&backend).contains("movq"));
+    }
+
+    #[rstest]
+    fn ret_ptr_uses_movq(mut backend: Backend) {
+        let r = backend.alloc_register();
+        backend.ret(r, PrimType::CharPtr, 3).unwrap();
+        assert!(output_string(&backend).contains("movq"));
+    }
+
+    #[rstest]
+    #[should_panic]
+    fn ret_void_panics(mut backend: Backend) {
+        let r = backend.alloc_register();
+        backend.ret(r, PrimType::Void, 3).unwrap();
+    }
+
+    // === load_glob with pointer types ===
+
+    #[rstest]
+    fn load_glob_charptr(mut backend: Backend) {
+        backend.load_glob("p", PrimType::CharPtr).unwrap();
+        assert!(output_string(&backend).contains("movq\tp(%rip),"));
+    }
+
+    #[rstest]
+    fn load_glob_intptr(mut backend: Backend) {
+        backend.load_glob("q", PrimType::IntPtr).unwrap();
+        assert!(output_string(&backend).contains("movq\tq(%rip),"));
+    }
+
+    #[rstest]
+    fn load_glob_longptr(mut backend: Backend) {
+        backend.load_glob("r", PrimType::LongPtr).unwrap();
+        assert!(output_string(&backend).contains("movq\tr(%rip),"));
+    }
+
+    #[rstest]
+    fn load_glob_voidptr(mut backend: Backend) {
+        backend.load_glob("s", PrimType::VoidPtr).unwrap();
+        assert!(output_string(&backend).contains("movq\ts(%rip),"));
+    }
+
+    // === store_glob with pointer types ===
+
+    #[rstest]
+    fn store_glob_charptr(mut backend: Backend) {
+        let reg = backend.alloc_register();
+        backend.store_glob(reg, "p", PrimType::CharPtr).unwrap();
+        assert!(output_string(&backend).contains(&format!("\tmovq\t{}, p(%rip)", reg)));
+    }
+
+    #[rstest]
+    fn store_glob_intptr(mut backend: Backend) {
+        let reg = backend.alloc_register();
+        backend.store_glob(reg, "q", PrimType::IntPtr).unwrap();
+        assert!(output_string(&backend).contains(&format!("\tmovq\t{}, q(%rip)", reg)));
+    }
+
+    // === data_section ===
+
+    #[rstest]
+    fn data_section_writes_bss(mut backend: Backend) {
+        backend.data_section().unwrap();
+        assert_eq!(output_string(&backend), ".bss\n.align 8\n");
+    }
+
+    // === glob_sym with pointer types ===
+
+    #[rstest]
+    fn glob_sym_charptr(mut backend: Backend) {
+        backend.glob_sym("p", PrimType::CharPtr).unwrap();
+        assert_eq!(output_string(&backend), "p:\n\t.zero 8\n");
+    }
+
+    #[rstest]
+    fn glob_sym_intptr(mut backend: Backend) {
+        backend.glob_sym("q", PrimType::IntPtr).unwrap();
+        assert_eq!(output_string(&backend), "q:\n\t.zero 8\n");
+    }
+
+    // === call with various types ===
+
+    #[rstest]
+    fn call_moves_rdi_and_rax(mut backend: Backend) {
+        let reg = backend.alloc_register();
+        let result = backend.call(reg, "foo").unwrap();
+        assert_eq!(result, Some(reg));
+        let output = output_string(&backend);
+        assert!(output.contains(&format!("\tmovq\t{}, %rdi", reg)));
+        assert!(output.contains("\tcall\tfoo"));
+        assert!(output.contains(&format!("\tmovq\t%rax, {}", reg)));
     }
 }

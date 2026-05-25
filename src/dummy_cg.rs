@@ -1,7 +1,7 @@
 use anyhow::Result;
 use crate::{
     cgen::CodeBackend,
-    sym::PrimType,
+    sym::{PrimType, SymFilteredIterator},
 };
 
 #[derive(Clone, Copy)]
@@ -27,16 +27,24 @@ impl CodeBackend for DummyBackend {
     fn alignment() -> usize { 0 }
 
     fn free_all_registers(&mut self) -> Result<()> {
-        todo!()
+        unimplemented!()
     }
 
     fn preamble(&mut self) -> Result<()> {
-        todo!()
+        unimplemented!()
     }
 
-    fn type_size(&self, dtype: crate::sym::PrimType) -> usize {
+    fn postamble(&mut self, _: SymFilteredIterator) -> Result<()> {
+        unimplemented!()
+    }
+
+    fn type_size(&self, dtype: PrimType) -> usize {
         match dtype {
-            PrimType::Long => 8,
+            PrimType::Long
+            | PrimType::CharPtr
+            | PrimType::IntPtr
+            | PrimType::LongPtr
+            | PrimType::VoidPtr => 8,
             PrimType::Int => 4,
             PrimType::Char => 1,
             PrimType::Void => 0,
@@ -55,55 +63,64 @@ impl CodeBackend for DummyBackend {
         Ok(DummyReg::Acc)
     }
 
-    fn load_glob(&mut self, _: &str, _: crate::sym::PrimType) -> Result<Self::Reg> {
+    fn load_glob(&mut self, _: &str, _: PrimType) -> Result<Self::Reg> {
         Ok(DummyReg::Acc)
     }
 
-    fn store_glob(&mut self, _: Self::Reg, _: &str, _: crate::sym::PrimType) -> Result<Self::Reg> {
-        todo!()
+    fn store_glob(&mut self, _: Self::Reg, _: &str, _: PrimType) -> Result<Self::Reg> {
+        unimplemented!()
     }
 
-    fn glob_sym(&mut self, _: &str, _: crate::sym::PrimType) -> Result<()> {
-        todo!()
+    fn glob_sym(&mut self, _: &str, _: PrimType) -> Result<()> {
+        unimplemented!()
     }
 
     fn add(&mut self, _: Self::Reg, _: Self::Reg) -> Result<Option<Self::Reg>> {
-        todo!()
+        unimplemented!()
     }
 
     fn sub(&mut self, _: Self::Reg, _: Self::Reg) -> Result<Option<Self::Reg>> {
-        todo!()
+        unimplemented!()
     }
 
     fn mul(&mut self, _: Self::Reg, _: Self::Reg) -> Result<Option<Self::Reg>> {
-        todo!()
+        unimplemented!()
     }
 
     fn div(&mut self, _: Self::Reg, _: Self::Reg) -> Result<Option<Self::Reg>> {
-        todo!()
+        unimplemented!()
     }
 
     fn compare_and_set(&mut self, _: &crate::ast::AstNode, _: Self::Reg, _: Self::Reg) -> Result<Option<Self::Reg>> {
-        todo!()
+        unimplemented!()
     }
 
     fn compare_and_jump(&mut self, _: &crate::ast::AstNode, _: Self::Reg, _: Self::Reg, _: usize) -> Result<Option<Self::Reg>> {
-        todo!()
+        unimplemented!()
     }
 
     fn label(&mut self, _: usize) -> Result<()> {
-        todo!()
+        unimplemented!()
     }
 
     fn jump(&mut self, _: usize) -> Result<()> {
-        todo!()
+        unimplemented!()
     }
 
     fn call(&mut self, _: Self::Reg, _: &str) -> Result<Option<Self::Reg>> {
-        todo!()
+        unimplemented!()
     }
 
-    fn ret(&mut self, _: Self::Reg, _: crate::sym::PrimType, _: usize) -> Result<()> {
-        todo!()
+    fn ret(&mut self, _: Self::Reg, _: PrimType, _: usize) -> Result<()> {
+        unimplemented!()
     }
+
+    fn address(&mut self, _: &str) -> Result<Option<Self::Reg>> {
+        unimplemented!()
+    }
+
+    fn deref(&mut self, _: Self::Reg, _: PrimType) -> Result<Option<Self::Reg>> {
+        unimplemented!()
+    }
+
 }

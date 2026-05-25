@@ -1,4 +1,10 @@
 // Given an AST, generate code recursively
+                // match &**inner {
+                //     AstNode::Ident { id: Identifier { name }, .. } => writeln!(self.backend, "# *{name}")?,
+                //     AstNode::Deref { .. } => writeln!(self.backend, "# *")?,
+                //     _ => panic!()
+                //
+                // }
 
 use std::{
     cell::RefCell,
@@ -8,7 +14,7 @@ use std::{
 use anyhow::Result;
 use crate::{
     ast::{AstNode, Identifier},
-    sym::{PrimType, SymbolTable},
+    sym::{PrimType, SymbolTable, SymFilteredIterator},
 };
 
 pub trait CodeBackend: Write {
@@ -17,6 +23,7 @@ pub trait CodeBackend: Write {
     // Required
     fn alignment() -> usize;
     fn free_all_registers(&mut self) -> Result<()>;
+    fn postamble(&mut self, iter: SymFilteredIterator) -> Result<()>;
     fn type_size(&self, dtype: PrimType) -> usize;
     fn func_preamble(&mut self, ident: &str) -> Result<()>;
     fn func_postamble(&mut self, label_num: usize) -> Result<()>;
@@ -32,6 +39,8 @@ pub trait CodeBackend: Write {
     fn jump(&mut self, label_num: usize) -> Result<()>;
     fn call(&mut self, r: Self::Reg, ident: &str) -> Result<Option<Self::Reg>>;
     fn ret(&mut self, r: Self::Reg, dtype: PrimType, label_num: usize) -> Result<()>;
+    fn address(&mut self, id: &str) -> Result<Option<Self::Reg>>;
+    fn deref(&mut self, r: Self::Reg, dtype: PrimType) -> Result<Option<Self::Reg>>;
 
     // Provided
 
@@ -43,7 +52,9 @@ pub trait CodeBackend: Write {
     }
 
     fn glob_sym(&mut self, sym: &str, dtype: PrimType) -> Result<()> {
-        writeln!(self, ".global {sym}")?;
+        // Only for true globals (available for extern)
+        // Our current ones are "static", even if we don't declare them like that
+        // writeln!(self, ".global {sym}")?;
         writeln!(self, "{sym}:")?;
         let size = self.type_size(dtype);
         if size == 0 {
@@ -259,6 +270,13 @@ where
                 Ok(None)
             }
             AstNode::FuncCall { .. } => self.gen_func_call(tree),
+            AstNode::Addr { id: Identifier { name }, .. } => {
+                self.backend.address(name)
+            }
+            AstNode::Deref { inner, .. } => {
+                let reg = self.gen_ast(inner, None, Some(tree), 0)?;
+                self.backend.deref(reg.unwrap(), inner.get_type().unwrap())
+            },
             AstNode::Return { .. } => self.gen_return(tree),
         }
     }
@@ -272,6 +290,10 @@ where
         self.backend.preamble()?;
 
         Ok(())
+    }
+
+    pub fn gen_postamble(&mut self) -> Result<()> {
+        self.backend.postamble(self.symbols.iter_global_vars())
     }
 
     pub fn gen_freeregs(&mut self) -> Result<()> {
@@ -305,8 +327,8 @@ mod tests {
         CodeGenerator::new(X86_64Backend::new(Vec::new()), symbols)
     }
 
-    fn output_string(cg: &CodeGenerator<X86_64Backend<Vec<u8>>>) -> String {
-        String::from_utf8(cg.backend.output.clone()).unwrap()
+    fn output_string(cg: CodeGenerator<X86_64Backend<Vec<u8>>>) -> String {
+        String::from_utf8(cg.backend.into_output()).unwrap()
     }
 
     // === Construction ===
@@ -333,7 +355,7 @@ mod tests {
         let node = AstNode::make_intlit(42, PrimType::Int);
         let result = cg.gen_ast(&node, None, None, 0).unwrap();
         assert!(result.is_some());
-        assert!(output_string(&cg).contains("movq\t$42,"));
+        assert!(output_string(cg).contains("movq\t$42,"));
     }
 
     #[rstest]
@@ -342,7 +364,7 @@ mod tests {
         let node = AstNode::make_intlit(255, PrimType::Char);
         let result = cg.gen_ast(&node, None, None, 0).unwrap();
         assert!(result.is_some());
-        assert!(output_string(&cg).contains("movq\t$255,"));
+        assert!(output_string(cg).contains("movq\t$255,"));
     }
 
     #[rstest]
@@ -351,7 +373,7 @@ mod tests {
         let node = AstNode::make_ident("x", PrimType::Long);
         let result = cg.gen_ast(&node, None, None, 0).unwrap();
         assert!(result.is_some());
-        assert!(output_string(&cg).contains("movq\tx(%rip),"));
+        assert!(output_string(cg).contains("movq\tx(%rip),"));
     }
 
     #[rstest]
@@ -360,7 +382,7 @@ mod tests {
         let node = AstNode::make_ident("c", PrimType::Char);
         let result = cg.gen_ast(&node, None, None, 0).unwrap();
         assert!(result.is_some());
-        assert!(output_string(&cg).contains("movzbq\tc(%rip),"));
+        assert!(output_string(cg).contains("movzbq\tc(%rip),"));
     }
 
     #[rstest]
@@ -368,7 +390,7 @@ mod tests {
         let mut cg = new_generator(&symbols);
         let result = cg.gen_ast(&AstNode::Empty, None, None, 0).unwrap();
         assert!(result.is_none());
-        assert!(output_string(&cg).is_empty());
+        assert!(output_string(cg).is_empty());
     }
 
     // === gen_ast: arithmetic ===
@@ -383,7 +405,7 @@ mod tests {
             PrimType::Char,
         );
         cg.gen_ast(&node, None, None, 0).unwrap();
-        let output = output_string(&cg);
+        let output = output_string(cg);
         assert!(output.contains("movq\t$1,"));
         assert!(output.contains("movq\t$2,"));
         assert!(output.contains("addq"));
@@ -399,7 +421,7 @@ mod tests {
             PrimType::Int,
         );
         cg.gen_ast(&node, None, None, 0).unwrap();
-        assert!(output_string(&cg).contains("subq"));
+        assert!(output_string(cg).contains("subq"));
     }
 
     #[rstest]
@@ -412,7 +434,7 @@ mod tests {
             PrimType::Int,
         );
         cg.gen_ast(&node, None, None, 0).unwrap();
-        assert!(output_string(&cg).contains("imulq"));
+        assert!(output_string(cg).contains("imulq"));
     }
 
     #[rstest]
@@ -425,7 +447,7 @@ mod tests {
             PrimType::Int,
         );
         cg.gen_ast(&node, None, None, 0).unwrap();
-        assert!(output_string(&cg).contains("idivq"));
+        assert!(output_string(cg).contains("idivq"));
     }
 
     // === gen_ast: comparison (non-branching → compare_and_set) ===
@@ -435,7 +457,7 @@ mod tests {
         let mut cg = new_generator(&symbols);
         let node = AstNode::make_binary(Token::EQ, AstNode::make_intlit(1, PrimType::Int), AstNode::make_intlit(2, PrimType::Int), PrimType::Int);
         cg.gen_ast(&node, None, None, 0).unwrap();
-        let output = output_string(&cg);
+        let output = output_string(cg);
         assert!(output.contains("cmpq"));
         assert!(output.contains("sete"));
     }
@@ -445,7 +467,7 @@ mod tests {
         let mut cg = new_generator(&symbols);
         let node = AstNode::make_binary(Token::LT, AstNode::make_intlit(1, PrimType::Int), AstNode::make_intlit(2, PrimType::Int), PrimType::Int);
         cg.gen_ast(&node, None, None, 0).unwrap();
-        assert!(output_string(&cg).contains("setl"));
+        assert!(output_string(cg).contains("setl"));
     }
 
     // === gen_glue_ast ===
@@ -458,7 +480,7 @@ mod tests {
             AstNode::make_function_call("printint", AstNode::make_intlit(2, PrimType::Long), PrimType::Long),
         );
         cg.gen_ast(&node, None, None, 0).unwrap();
-        let output = output_string(&cg);
+        let output = output_string(cg);
         let first = output.find("movq\t$1,").unwrap();
         let second = output.find("movq\t$2,").unwrap();
         assert!(first < second, "left print should precede right print");
@@ -473,7 +495,7 @@ mod tests {
         let body = AstNode::make_function_call("printint", AstNode::make_intlit(42, PrimType::Int), PrimType::Int);
         let node = AstNode::make_if(cond, body, None);
         cg.gen_ast(&node, None, None, 0).unwrap();
-        let output = output_string(&cg);
+        let output = output_string(cg);
         assert!(output.contains("call\tprintint"));
         assert!(output.contains("L1:"));
     }
@@ -486,7 +508,7 @@ mod tests {
         let false_branch = AstNode::make_function_call("printint", AstNode::make_intlit(20, PrimType::Int), PrimType::Int);
         let node = AstNode::make_if(cond, true_branch, Some(false_branch));
         cg.gen_ast(&node, None, None, 0).unwrap();
-        let output = output_string(&cg);
+        let output = output_string(cg);
         assert!(output.contains("jne"));
         assert!(output.contains("jmp\t.L2"));
         assert!(output.contains(".L1:"));
@@ -504,7 +526,7 @@ mod tests {
         let outer_cond = AstNode::make_binary(Token::EQ, AstNode::make_intlit(1, PrimType::Int), AstNode::make_intlit(1, PrimType::Int), PrimType::Int);
         let node = AstNode::make_if(outer_cond, inner_if, None);
         cg.gen_ast(&node, None, None, 0).unwrap();
-        let output = output_string(&cg);
+        let output = output_string(cg);
         // Should have two sets of labels
         assert!(output.contains(".L1:"));
         assert!(output.contains(".L2:"));
@@ -520,7 +542,7 @@ mod tests {
         let body = AstNode::make_function_call("printint", AstNode::make_intlit(7, PrimType::Int), PrimType::Int);
         let node = AstNode::make_while(cond, body);
         cg.gen_ast(&node, None, None, 0).unwrap();
-        let output = output_string(&cg);
+        let output = output_string(cg);
         assert!(output.contains(".L1:"));
         assert!(output.contains("je"));
         assert!(output.contains("call\tprintint"));
@@ -534,7 +556,7 @@ mod tests {
         let cond = AstNode::make_binary(Token::EQ, AstNode::make_intlit(1, PrimType::Int), AstNode::make_intlit(1, PrimType::Int), PrimType::Int);
         let node = AstNode::make_while(cond, AstNode::Empty);
         cg.gen_ast(&node, None, None, 0).unwrap();
-        let output = output_string(&cg);
+        let output = output_string(cg);
         assert!(output.contains("L1:"));
         assert!(output.contains("L2:"));
     }
@@ -548,7 +570,7 @@ mod tests {
         let expr = AstNode::make_intlit(42, PrimType::Int);
         let node = AstNode::make_assign(id, expr);
         cg.gen_ast(&node, None, None, 0).unwrap();
-        let output = output_string(&cg);
+        let output = output_string(cg);
         assert!(output.contains("movq\t$42,"));
         assert!(output.contains("x(%rip)"));
     }
@@ -560,7 +582,7 @@ mod tests {
         let expr = AstNode::make_intlit(7, PrimType::Char);
         let node = AstNode::make_assign(id, expr);
         cg.gen_ast(&node, None, None, 0).unwrap();
-        assert!(output_string(&cg).contains("movb"));
+        assert!(output_string(cg).contains("movb"));
     }
 
     #[rstest]
@@ -570,7 +592,7 @@ mod tests {
         let id = AstNode::make_lvident("x", PrimType::Int);
         let node = AstNode::make_assign(id, sum);
         cg.gen_ast(&node, None, None, 0).unwrap();
-        let output = output_string(&cg);
+        let output = output_string(cg);
         assert!(output.contains("addq"));
         assert!(output.contains("x(%rip)"));
     }
@@ -586,7 +608,7 @@ mod tests {
         let body = AstNode::make_function_call("printint", AstNode::make_intlit(42, PrimType::Int), PrimType::Int);
         let node = AstNode::make_function(name, body);
         cg.gen_ast(&node, None, None, 0).unwrap();
-        let output = output_string(&cg);
+        let output = output_string(cg);
         assert!(output.contains("main:"));
         assert!(output.contains("call\tprintint"));
         assert!(output.contains("ret"));
@@ -606,7 +628,7 @@ mod tests {
         );
         let node = AstNode::make_function(name, body);
         cg.gen_ast(&node, None, None, 0).unwrap();
-        let output = output_string(&cg);
+        let output = output_string(cg);
         assert!(output.contains("myfunc:"));
         // Global declarations no longer produce code on the spot
         assert!(!output.contains(".comm\tx,8,8"));
@@ -643,7 +665,7 @@ mod tests {
         );
         let node = AstNode::make_function(name, body);
         cg.gen_ast(&node, None, None, 0).unwrap();
-        let output = output_string(&cg);
+        let output = output_string(cg);
         assert!(output.contains("main:"));
         // Global declarations no longer generate output on the spot
         assert!(!output.contains(".comm\tx,4,4"));
@@ -651,6 +673,68 @@ mod tests {
         assert!(output.contains("movzbl\tx(%rip),"));
         assert!(output.contains("call\tprintint"));
         assert!(output.contains("ret"));
+    }
+
+    // === gen_return ===
+
+    #[rstest]
+    fn gen_return_int_emits_movl_and_jmp(symbols: SymbolTable) {
+        symbols.add_glob_fn("main", PrimType::Int);
+        symbols.set_fn_end_label("main", 1);
+        let mut cg = new_generator(&symbols);
+        let ret = AstNode::make_return("main", AstNode::make_intlit(42, PrimType::Int));
+        cg.gen_ast(&ret, None, None, 0).unwrap();
+        let output = output_string(cg);
+        assert!(output.contains("movl"));  // movl for Int return value
+        assert!(output.contains("jmp"));   // jump to end label
+    }
+
+    #[rstest]
+    fn gen_return_char_emits_movzbl(symbols: SymbolTable) {
+        symbols.add_glob_fn("main", PrimType::Char);
+        symbols.set_fn_end_label("main", 1);
+        let mut cg = new_generator(&symbols);
+        let ret = AstNode::make_return("main", AstNode::make_intlit(7, PrimType::Char));
+        cg.gen_ast(&ret, None, None, 0).unwrap();
+        assert!(output_string(cg).contains("movzbl"));
+    }
+
+    // === gen_addr ===
+
+    #[rstest]
+    fn gen_addr_emits_leaq(symbols: SymbolTable) {
+        symbols.add_glob("x", PrimType::Int, crate::sym::StructuralType::Variable);
+        let mut cg = new_generator(&symbols);
+        let id = AstNode::make_ident("x", PrimType::Int);
+        let addr = id.into_pointer("err");
+        cg.gen_ast(&addr, None, None, 0).unwrap();
+        assert!(output_string(cg).contains("leaq"));
+    }
+
+    // === gen_deref ===
+
+    #[rstest]
+    fn gen_deref_emits_movsbq(symbols: SymbolTable) {
+        symbols.add_glob("p", PrimType::CharPtr, crate::sym::StructuralType::Variable);
+        let mut cg = new_generator(&symbols);
+        let id = AstNode::make_ident("p", PrimType::CharPtr);
+        let deref = id.make_deref("err");
+        cg.gen_ast(&deref, None, None, 0).unwrap();
+        assert!(output_string(cg).contains("movsbq"));
+    }
+
+    // === gen_preamble with globals ===
+
+    #[rstest]
+    fn gen_preamble_emits_glob_syms(symbols: SymbolTable) {
+        symbols.add_glob("x", PrimType::Int, crate::sym::StructuralType::Variable);
+        symbols.add_glob("y", PrimType::Long, crate::sym::StructuralType::Variable);
+        let mut cg = new_generator(&symbols);
+        cg.gen_preamble().unwrap();
+        let output = output_string(cg);
+        assert!(output.contains(".bss"));
+        assert!(output.contains("x:\n\t.zero 4"));
+        assert!(output.contains("y:\n\t.zero 8"));
     }
 }
 

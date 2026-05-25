@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     fmt,
     io::Write,
+    mem,
 };
 
 use anyhow::Result;
@@ -9,10 +10,10 @@ use anyhow::Result;
 use crate::{
     ast::AstNode,
     cgen::CodeBackend,
-    sym::PrimType
+    sym::{PrimType, SymFilteredIterator},
 };
 
-static FUNC_PREAMBLE: &str = "
+static FUNC_PREAMBLE: &str = "\
 .text
 \t.globl\t{name}
 \t.type\t{name}, %function
@@ -20,16 +21,16 @@ static FUNC_PREAMBLE: &str = "
 \tpush\t{fp, lr}
 \tadd\tfp, sp, #4
 \tsub\tsp, sp, #8
-\tstr\tr0, [fp, #-8]
-";
+\tstr\tr0, [fp, #-8]";
 
-static POSTAMBLE: &str = "
+static FUNC_POSTAMBLE: &str = "\
 \tsub\tsp, fp, #4
 \tpop\t{fp, pc}
-";
+.L_POOL_{name}:";
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum ArmV7Reg {
+    R3,
     R4,
     R5,
     R6,
@@ -39,6 +40,7 @@ pub enum ArmV7Reg {
 impl fmt::Display for ArmV7Reg {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            ArmV7Reg::R3 => write!(f, "r3"),
             ArmV7Reg::R4 => write!(f, "r4"),
             ArmV7Reg::R5 => write!(f, "r5"),
             ArmV7Reg::R6 => write!(f, "r6"),
@@ -77,8 +79,10 @@ fn ast_to_set_op(op: &AstNode) -> (&'static str, &'static str) {
 pub struct ArmV7Backend<T>
     where T: Write,
 {
-    pub(crate) output: T,
-    pub(crate) reg_status: HashMap<ArmV7Reg, bool>,
+    output: T,
+    reg_status: HashMap<ArmV7Reg, bool>,
+    used_globals: Vec<String>,
+    current_function: String,
 }
 
 impl<T> ArmV7Backend<T>
@@ -92,8 +96,30 @@ impl<T> ArmV7Backend<T>
                            (ArmV7Reg::R5, true),
                            (ArmV7Reg::R6, true),
                            (ArmV7Reg::R7, true)]),
+            used_globals: vec![],
+            current_function: String::from(""),
         }
     }
+
+    fn get_global_offset(&mut self, name: &str) -> usize {
+        let idx = match self.used_globals.iter().position(|x| x == name) {
+            Some(pos) => pos,
+            None => {
+                self.used_globals.push(name.into());
+                self.used_globals.len() - 1
+            }
+        };
+
+        idx * 4
+    }
+
+    fn load_global_offset_addr(&mut self, r: ArmV7Reg, name: &str) -> Result<()> {
+        let offset = self.get_global_offset(name);
+        let pool = format!(".L_POOL_{}", &self.current_function);
+        writeln!(self, "\tldr\t{r}, {pool}+{offset}")?;
+        Ok(())
+    }
+
 
     fn free_register(&mut self, reg: ArmV7Reg) {
         self.reg_status.entry(reg).insert_entry(true);
@@ -109,6 +135,10 @@ impl<T> ArmV7Backend<T>
         panic!("Out of registers!")
     }
 }
+
+// fn var_offset_label(ident: &str) -> String {
+//     format!(".L_VAR_{}_OFFSET", ident.to_ascii_uppercase())
+// }
 
 impl<T> Write for ArmV7Backend<T>
     where T: Write,
@@ -140,21 +170,39 @@ impl<T> CodeBackend for ArmV7Backend<T>
     fn type_size(&self, dtype: crate::sym::PrimType) -> usize {
         match dtype {
             PrimType::Char => 1,
-            PrimType::Int => 4,
-            PrimType::Long => 4,
+            PrimType::Int
+            | PrimType::Long
+            | PrimType::CharPtr
+            | PrimType::IntPtr
+            | PrimType::LongPtr
+            | PrimType::VoidPtr => 4,
             PrimType::Void => 0,
         }
     }
 
+    fn postamble(&mut self, _: SymFilteredIterator) -> Result<()> {
+        // Not needed - yet
+        Ok(())
+    }
+
     fn func_preamble(&mut self, ident: &str) -> Result<()> {
         let preamble = FUNC_PREAMBLE.replace("{name}", ident);
-        write!(self, "{}", preamble)?;
+        writeln!(self, "{}", preamble)?;
+        self.current_function = ident.into();
+
         Ok(())
     }
 
     fn func_postamble(&mut self, label_num: usize) -> Result<()> {
         self.label(label_num)?;
-        write!(self, "{}", POSTAMBLE)?;
+        let postamble = FUNC_POSTAMBLE.replace("{name}", &self.current_function);
+        writeln!(self, "{}", postamble)?;
+
+        for var in mem::take(&mut self.used_globals) {
+            writeln!(self, "\t.word\t{}", var)?;
+        }
+        self.current_function.truncate(0);
+
         Ok(())
     }
 
@@ -173,18 +221,23 @@ impl<T> CodeBackend for ArmV7Backend<T>
     fn load_glob(&mut self, ident: &str, _: crate::sym::PrimType) -> anyhow::Result<Self::Reg> {
         let reg = self.alloc_register();
 
-        writeln!(self, "\tldr\tr3, ={}", ident)?;
+        self.load_global_offset_addr(ArmV7Reg::R3, ident)?;
         writeln!(self, "\tldr\t{}, [r3]", reg)?;
 
         Ok(reg)
     }
 
     fn store_glob(&mut self, r: Self::Reg, ident: &str, dtype: crate::sym::PrimType) -> anyhow::Result<Self::Reg> {
-        writeln!(self, "\tldr\tr3, ={}", ident)?;
+        self.load_global_offset_addr(ArmV7Reg::R3, ident)?;
         match dtype {
             PrimType::Char =>
                 writeln!(self, "\tstrb\t{}, [r3]", r)?,
-            PrimType::Int|PrimType::Long =>
+            PrimType::Int
+            |PrimType::Long
+            |PrimType::CharPtr
+            |PrimType::IntPtr
+            |PrimType::LongPtr
+            |PrimType::VoidPtr =>
                 writeln!(self, "\tstr\t{}, [r3]", r)?,
             PrimType::Void => unreachable!("Can't generate store_glob for void types!"),
         }
@@ -268,6 +321,26 @@ impl<T> CodeBackend for ArmV7Backend<T>
         writeln!(self, "\tmov\tr0, {}", r)?;
 
         self.jump(label_num)
+    }
+
+    fn address(&mut self, id: &str) -> Result<Option<Self::Reg>> {
+        let reg = self.alloc_register();
+        self.load_global_offset_addr(reg, id)?;
+
+        Ok(Some(reg))
+    }
+
+    fn deref(&mut self, r: Self::Reg, dtype: PrimType) -> Result<Option<Self::Reg>> {
+        match dtype {
+            PrimType::CharPtr
+            | PrimType::IntPtr
+            | PrimType::LongPtr => {
+                writeln!(self, "\tldr\t{r}, [{r}]")?;
+            }
+            _ => panic!("Trying to deref illegal type: {:?}", dtype)
+        }
+
+        Ok(Some(r))
     }
 }
 
@@ -409,8 +482,7 @@ mod tests {
     fn load_glob_loads_via_r3(mut backend: Backend) {
         backend.load_glob("x", PrimType::Int).unwrap();
         let output = output_string(&backend);
-        assert!(output.contains("ldr\tr3, =x"));
-        assert!(output.contains("ldr\t"));
+        assert!(output.contains("ldr\tr3, .L_POOL_"));
     }
 
     #[rstest]
@@ -452,19 +524,19 @@ mod tests {
     #[rstest]
     fn glob_sym_long(mut backend: Backend) {
         backend.glob_sym("l", PrimType::Long).unwrap();
-        assert_eq!(output_string(&backend), ".global l\nl:\n\t.zero 4\n");
+        assert_eq!(output_string(&backend), "l:\n\t.zero 4\n");
     }
 
     #[rstest]
     fn glob_sym_int(mut backend: Backend) {
         backend.glob_sym("x", PrimType::Int).unwrap();
-        assert_eq!(output_string(&backend), ".global x\nx:\n\t.zero 4\n");
+        assert_eq!(output_string(&backend), "x:\n\t.zero 4\n");
     }
 
     #[rstest]
     fn glob_sym_char(mut backend: Backend) {
         backend.glob_sym("c", PrimType::Char).unwrap();
-        assert_eq!(output_string(&backend), ".global c\nc:\n\t.zero 1\n");
+        assert_eq!(output_string(&backend), "c:\n\t.zero 1\n");
     }
 
     #[rstest]
@@ -654,6 +726,93 @@ mod tests {
         assert_eq!(format!("{}", ArmV7Reg::R6), "r6");
         assert_eq!(format!("{}", ArmV7Reg::R7), "r7");
     }
+
+    // === reg_as_8b (not applicable for ARM - no 8b variant) ===
+
+    // === address ===
+
+    #[rstest]
+    fn address_emits_ldr_from_pool(mut backend: Backend) {
+        backend.func_preamble("test").unwrap();
+        let reg = backend.address("x").unwrap();
+        assert!(reg.is_some());
+        assert!(output_string(&backend).contains("ldr"));
+    }
+
+    // === deref ===
+
+    #[rstest]
+    fn deref_charptr_emits_ldr(mut backend: Backend) {
+        let r = backend.alloc_register();
+        let result = backend.deref(r, PrimType::CharPtr).unwrap();
+        assert_eq!(result, Some(r));
+        assert!(output_string(&backend).contains("ldr"));
+    }
+
+    #[rstest]
+    fn deref_intptr_emits_ldr(mut backend: Backend) {
+        let r = backend.alloc_register();
+        let result = backend.deref(r, PrimType::IntPtr).unwrap();
+        assert_eq!(result, Some(r));
+        assert!(output_string(&backend).contains("ldr"));
+    }
+
+    #[rstest]
+    fn deref_longptr_emits_ldr(mut backend: Backend) {
+        let r = backend.alloc_register();
+        let result = backend.deref(r, PrimType::LongPtr).unwrap();
+        assert_eq!(result, Some(r));
+        assert!(output_string(&backend).contains("ldr"));
+    }
+
+    #[rstest]
+    #[should_panic(expected = "Trying to deref illegal type")]
+    fn deref_voidptr_panics(mut backend: Backend) {
+        let r = backend.alloc_register();
+        backend.deref(r, PrimType::VoidPtr).unwrap();
+    }
+
+    // === store_glob with pointer types ===
+
+    #[rstest]
+    fn store_glob_charptr(mut backend: Backend) {
+        let reg = backend.alloc_register();
+        backend.store_glob(reg, "p", PrimType::CharPtr).unwrap();
+        assert!(output_string(&backend).contains(&format!("\tstr\t{}, [r3]", reg)));
+    }
+
+    #[rstest]
+    fn store_glob_intptr(mut backend: Backend) {
+        let reg = backend.alloc_register();
+        backend.store_glob(reg, "q", PrimType::IntPtr).unwrap();
+        assert!(output_string(&backend).contains(&format!("\tstr\t{}, [r3]", reg)));
+    }
+
+    // === load_glob with pointer types (all load via r3) ===
+
+    #[rstest]
+    fn load_glob_charptr(mut backend: Backend) {
+        backend.load_glob("p", PrimType::CharPtr).unwrap();
+        assert!(output_string(&backend).contains("ldr"));
+    }
+
+    // === data_section ===
+
+    #[rstest]
+    fn data_section_writes_bss(mut backend: Backend) {
+        backend.data_section().unwrap();
+        assert_eq!(output_string(&backend), ".bss\n.align 2\n");
+    }
+
+    // === glob_sym with pointer types ===
+
+    #[rstest]
+    fn glob_sym_charptr(mut backend: Backend) {
+        backend.glob_sym("p", PrimType::CharPtr).unwrap();
+        assert_eq!(output_string(&backend), "p:\n\t.zero 4\n");
+    }
+
+    // === R3 register (not allocatable but used internally) ===
 
     // === type_size ===
 
