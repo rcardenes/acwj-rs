@@ -9,7 +9,7 @@ use std::{
 pub static TEXTLEN: usize = 512; // Maximum lenght of symbols in input
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Token {
+pub enum TokenType {
     Amper,         // &
     Plus,          // +
     Minus,         // -
@@ -45,29 +45,42 @@ pub enum Token {
     IntLit(i64),   // Integer literal
 }
 
-impl Token {
+impl TokenType {
     pub fn is_type(&self) -> bool {
-        matches!(self, Token::Void|Token::Char|Token::Int|Token::Long)
+        matches!(self, TokenType::Void|TokenType::Char|TokenType::Int|TokenType::Long)
     }
 }
 
-impl fmt::Display for Token {
+impl fmt::Display for TokenType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:?}", self)
     }
 }
 
-static KEYWORDS: &[(&str, Token)] = &[
-    ("char", Token::Char),
-    ("else", Token::Else),
-    ("for", Token::For),
-    ("if", Token::If),
-    ("int", Token::Int),
-    ("long", Token::Long),
-    ("return", Token::Return),
-    ("void", Token::Void),
-    ("while", Token::While),
+static KEYWORDS: &[(&str, TokenType)] = &[
+    ("char", TokenType::Char),
+    ("else", TokenType::Else),
+    ("for", TokenType::For),
+    ("if", TokenType::If),
+    ("int", TokenType::Int),
+    ("long", TokenType::Long),
+    ("return", TokenType::Return),
+    ("void", TokenType::Void),
+    ("while", TokenType::While),
 ];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Token {
+    pub(crate) ttype: TokenType,
+    pub(crate) line: usize,
+    pub(crate) col: usize,
+}
+
+impl Token {
+    pub fn is_type(&self) -> bool {
+        self.ttype.is_type()
+    }
+}
 
 fn is_valid_ident_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_'
@@ -78,8 +91,9 @@ pub struct Scanner<T> {
     buffer: RefCell<BufReader<T>>,
     putback_char: RefCell<Option<char>>,
     putback_token: RefCell<Option<Token>>,
-    keyword_map: HashMap<&'static str, Token>,
+    keyword_map: HashMap<&'static str, TokenType>,
     line: RefCell<usize>,
+    col: RefCell<usize>,
 }
 
 impl<T> Scanner<T>
@@ -91,6 +105,7 @@ where T: Read
             putback_char: None.into(),
             putback_token: None.into(),
             line: 1.into(),
+            col: 1.into(),
             keyword_map: KEYWORDS.iter().cloned().collect(),
         }
     }
@@ -110,45 +125,46 @@ where T: Read
         if let Some(t) = self.putback_token.borrow_mut().take() {
             Some(t)
         } else {
-            match self.skip()? {
-                '(' => Some(Token::LeftParen),
-                ')' => Some(Token::RightParen),
-                '{' => Some(Token::LeftBrace),
-                '}' => Some(Token::RightBrace),
-                '+' => Some(Token::Plus),
-                '-' => Some(Token::Minus),
-                '*' => Some(Token::Star),
-                '/' => Some(Token::Slash),
-                ';' => Some(Token::Semi),
+            let (line, col) = (self.get_line(), self.get_col());
+            let ttype = match self.skip()? {
+                '(' => TokenType::LeftParen,
+                ')' => TokenType::RightParen,
+                '{' => TokenType::LeftBrace,
+                '}' => TokenType::RightBrace,
+                '+' => TokenType::Plus,
+                '-' => TokenType::Minus,
+                '*' => TokenType::Star,
+                '/' => TokenType::Slash,
+                ';' => TokenType::Semi,
                 '=' => {
                     if let Some('=') = self.peek() {
                         self.clear_putback_char();
-                        Some(Token::EQ)
+                        TokenType::EQ
                     } else {
-                        Some(Token::Assign)
+                        TokenType::Assign
                     }
                 },
                 '<' => {
                     if let Some('=') = self.peek() {
                         self.clear_putback_char();
-                        Some(Token::LE)
+                        TokenType::LE
                     } else {
-                        Some(Token::LT)
+                        TokenType::LT
                     }
                 },
                 '>' => {
                     if let Some('=') = self.peek() {
                         self.clear_putback_char();
-                        Some(Token::GE)
+                        TokenType::GE
                     } else {
-                        Some(Token::GT)
+                        TokenType::GT
                     }
                 },
                 '!' => {
                     match self.peek() {
                         Some('=') => {
                             self.clear_putback_char();
-                            Some(Token::NE)
+                            TokenType::NE
                         },
                         Some(c) => self.fatal_extra("Unrecognised character", c),
                         None => self.fatal("Found EOF while parsing expression")
@@ -157,33 +173,39 @@ where T: Read
                 '&' => {
                     if let Some('&') = self.peek() {
                         self.clear_putback_char();
-                        Some(Token::LogAnd)
+                        TokenType::LogAnd
                     } else {
-                        Some(Token::Amper)
+                        TokenType::Amper
                     }
                 },
                 c if c.is_ascii_digit() => {
-                    Some(Token::IntLit(self.scan_int(c)))
+                    TokenType::IntLit(self.scan_int(c))
                 }
                 c if c.is_ascii_alphabetic() || c == '_' => {
                     self.putback_char(c);
                     let ident = self.scan_ident(TEXTLEN);
 
                     if let Some(t) = self.keyword(&ident) {
-                        Some(t)
+                        t
                     } else {
-                        Some(Token::Ident(ident))
+                        TokenType::Ident(ident)
                     }
                 }
                 c => {
                     panic!("Unrecognised character '{}' on line {}", c, self.line.borrow());
                 }
-            }
+            };
+
+            Some(Token { ttype, line, col })
         }
     }
 
     pub fn get_line(&self) -> usize {
         *self.line.borrow()
+    }
+
+    pub fn get_col(&self) -> usize {
+        *self.col.borrow()
     }
 
     // PUTBACK FUNCTIONS
@@ -210,7 +232,10 @@ where T: Read
             match self.buffer.borrow_mut().read_exact(&mut buf) {
                 Ok(_) => {
                     if buf[0] == b'\n' {
-                        self.line.borrow_mut().add_assign(1)
+                        self.line.borrow_mut().add_assign(1);
+                        *self.col.borrow_mut() = 1;
+                    } else {
+                        self.col.borrow_mut().add_assign(1);
                     }
                     Some(buf[0] as char)
                 }
@@ -263,7 +288,7 @@ where T: Read
         while let Some(c) = self.next() {
             if is_valid_ident_char(c) {
                 if lim == buffer.len() {
-                    panic!("identifier too long in line {}", self.line.borrow());
+                    panic!("identifier too long in line {}", self.get_line());
                 }
 
                 buffer.push(c);
@@ -276,7 +301,7 @@ where T: Read
         buffer
     }
 
-    fn keyword(&self, s: &str) -> Option<Token> {
+    fn keyword(&self, s: &str) -> Option<TokenType> {
         self.keyword_map.get(s).cloned()
     }
 
@@ -284,13 +309,13 @@ where T: Read
     // If a token was found and matches the expected one, return 'true'.
     // Else panic
     pub fn if_not_eof_matches<F>(&self, expected: F, expected_string: &str) -> Option<Token>
-        where F: Fn(&Token) -> bool
+        where F: Fn(&TokenType) -> bool
     {
         if let Some(tok) = self.scan() {
-            if expected(&tok) {
+            if expected(&tok.ttype) {
                 Some(tok)
             } else {
-                panic!("Expected {} on line {}; found {} instead", expected_string, self.line.borrow(), tok);
+                panic!("Expected {} on line {}; found {} instead", expected_string, self.line.borrow(), tok.ttype);
             }
         } else {
             None
@@ -298,7 +323,7 @@ where T: Read
     }
 
     // Consume a token. If it matches the expected one. Else panic
-    pub fn matches(&self, expected: Token, expected_string: &str) -> Token {
+    pub fn matches(&self, expected: TokenType, expected_string: &str) -> Token {
         if let Some(tok) = self.if_not_eof_matches(|tok| *tok == expected, expected_string) {
             tok
         } else {
@@ -308,18 +333,18 @@ where T: Read
 
     pub fn ident(&self, expected_string: Option<&str>) -> String {
         let exp = expected_string.unwrap_or("identifier");
-        let res = self.if_not_eof_matches(|tok| matches!(tok, &Token::Ident(_)), exp);
+        let res = self.if_not_eof_matches(|tok| matches!(tok, &TokenType::Ident(_)), exp);
         match res {
-            Some(Token::Ident(name)) => name,
+            Some(Token { ttype: TokenType::Ident(name), .. }) => name,
             None => panic!("End of input while expecting an identifier"),
             _ => unreachable!()
         }
     }
 
-    pub fn maybe_token(&self, token: Token) -> bool {
+    pub fn maybe_token(&self, token: TokenType) -> bool {
         match self.scan() {
             Some(tok) => {
-                if tok == token {
+                if tok.ttype == token {
                     true
                 } else {
                     self.putback_token(tok);
@@ -331,23 +356,23 @@ where T: Read
     }
 
     pub fn semi(&self) -> Token {
-        self.matches(Token::Semi, ";")
+        self.matches(TokenType::Semi, ";")
     }
 
     pub fn lbrace(&self) -> Token {
-        self.matches(Token::LeftBrace, "{")
+        self.matches(TokenType::LeftBrace, "{")
     }
 
     pub fn lparen(&self) -> Token {
-        self.matches(Token::LeftParen, "(")
+        self.matches(TokenType::LeftParen, "(")
     }
 
     pub fn rparen(&self) -> Token {
-        self.matches(Token::RightParen, ")")
+        self.matches(TokenType::RightParen, ")")
     }
 
     pub fn fatal(&self, error_msg: &str) -> ! {
-        panic!("{} on line {}", error_msg, self.get_line())
+        panic!("{} at {},{}", error_msg, self.get_line(), self.get_col())
     }
 
     pub fn fatal_extra<D>(&self, error_msg: &str, value: D) -> !
@@ -385,6 +410,10 @@ mod tests {
         }
     }
 
+    fn to_vec_tokentype(v: Vec<Token>) -> Vec<TokenType> {
+        v.into_iter().map(|t| t.ttype).collect()
+    }
+
     fn scan_all_mem(input: &str) -> Vec<Token> {
         let scanner = Scanner::new(Cursor::new(input.as_bytes().to_vec()));
         let mut tokens = vec![];
@@ -398,37 +427,37 @@ mod tests {
 
     #[test]
     fn scan_plus() {
-        assert_eq!(scan_all_mem("+"), vec![Token::Plus]);
+        assert_eq!(to_vec_tokentype(scan_all_mem("+")), vec![TokenType::Plus]);
     }
 
     #[test]
     fn scan_minus() {
-        assert_eq!(scan_all_mem("-"), vec![Token::Minus]);
+        assert_eq!(to_vec_tokentype(scan_all_mem("-")), vec![TokenType::Minus]);
     }
 
     #[test]
     fn scan_star() {
-        assert_eq!(scan_all_mem("*"), vec![Token::Star]);
+        assert_eq!(to_vec_tokentype(scan_all_mem("*")), vec![TokenType::Star]);
     }
 
     #[test]
     fn scan_slash() {
-        assert_eq!(scan_all_mem("/"), vec![Token::Slash]);
+        assert_eq!(to_vec_tokentype(scan_all_mem("/")), vec![TokenType::Slash]);
     }
 
     #[test]
     fn scan_single_digit_intlit() {
-        assert_eq!(scan_all_mem("7"), vec![Token::IntLit(7)]);
+        assert_eq!(to_vec_tokentype(scan_all_mem("7")), vec![TokenType::IntLit(7)]);
     }
 
     #[test]
     fn scan_multidigit_intlit() {
-        assert_eq!(scan_all_mem("1234"), vec![Token::IntLit(1234)]);
+        assert_eq!(to_vec_tokentype(scan_all_mem("1234")), vec![TokenType::IntLit(1234)]);
     }
 
     #[test]
     fn scan_skips_leading_and_trailing_whitespace() {
-        assert_eq!(scan_all_mem("  +  "), vec![Token::Plus]);
+        assert_eq!(to_vec_tokentype(scan_all_mem("  +  ")), vec![TokenType::Plus]);
     }
 
     #[test]
@@ -472,7 +501,7 @@ mod tests {
     #[test]
     fn scan_newline_then_eof() {
         let scanner = Scanner::new(Cursor::new(b"1\n".to_vec()));
-        assert_eq!(scanner.scan(), Some(Token::IntLit(1)));
+        assert_eq!(scanner.scan().map(|t| t.ttype), Some(TokenType::IntLit(1)));
         assert_eq!(scanner.get_line(), 2);
         assert!(scanner.scan().is_none());
     }
@@ -486,26 +515,26 @@ mod tests {
     #[test]
     fn scan_sequence_of_mixed_tokens() {
         assert_eq!(
-            scan_all_mem("1 + 2"),
-            vec![Token::IntLit(1), Token::Plus, Token::IntLit(2)],
+            to_vec_tokentype(scan_all_mem("1 + 2")),
+            vec![TokenType::IntLit(1), TokenType::Plus, TokenType::IntLit(2)],
         );
     }
 
     #[test]
     fn scan_int_keyword() {
-        assert_eq!(scan_all_mem("int"), vec![Token::Int]);
+        assert_eq!(to_vec_tokentype(scan_all_mem("int")), vec![TokenType::Int]);
     }
 
     #[test]
     fn scan_identifier() {
-        assert_eq!(scan_all_mem("x"), vec![Token::Ident("x".to_string())]);
-        assert_eq!(scan_all_mem("foo"), vec![Token::Ident("foo".to_string())]);
-        assert_eq!(scan_all_mem("_bar"), vec![Token::Ident("_bar".to_string())]);
+        assert_eq!(to_vec_tokentype(scan_all_mem("x")), vec![TokenType::Ident("x".to_string())]);
+        assert_eq!(to_vec_tokentype(scan_all_mem("foo")), vec![TokenType::Ident("foo".to_string())]);
+        assert_eq!(to_vec_tokentype(scan_all_mem("_bar")), vec![TokenType::Ident("_bar".to_string())]);
     }
 
     #[test]
     fn scan_equals() {
-        assert_eq!(scan_all_mem("="), vec![Token::Assign]);
+        assert_eq!(to_vec_tokentype(scan_all_mem("=")), vec![TokenType::Assign]);
     }
 
     static TEST_DATA_FILES: &[&str] = &[
@@ -516,11 +545,11 @@ mod tests {
         // "input05",
     ];
 
-    static EXPECTED_TOKENS: &[&[Token]] = &[
-        &[Token::IntLit(2), Token::Plus, Token::IntLit(3), Token::Star, Token::IntLit(5), Token::Minus, Token::IntLit(8), Token::Slash, Token::IntLit(3)],
-        &[Token::IntLit(13), Token::Minus, Token::IntLit(6), Token::Plus, Token::IntLit(4), Token::Star, Token::IntLit(5), Token::Plus, Token::IntLit(8), Token::Slash, Token::IntLit(3)],
-        &[Token::IntLit(12), Token::IntLit(34), Token::Plus, Token::Minus, Token::IntLit(56), Token::Star, Token::Slash, Token::Minus, Token::Minus, Token::IntLit(8), Token::Plus, Token::Star, Token::IntLit(2)],
-        &[Token::IntLit(23), Token::Plus, Token::IntLit(18), Token::Minus, Token::IntLit(45)],
+    static EXPECTED_TOKENS: &[&[TokenType]] = &[
+        &[TokenType::IntLit(2), TokenType::Plus, TokenType::IntLit(3), TokenType::Star, TokenType::IntLit(5), TokenType::Minus, TokenType::IntLit(8), TokenType::Slash, TokenType::IntLit(3)],
+        &[TokenType::IntLit(13), TokenType::Minus, TokenType::IntLit(6), TokenType::Plus, TokenType::IntLit(4), TokenType::Star, TokenType::IntLit(5), TokenType::Plus, TokenType::IntLit(8), TokenType::Slash, TokenType::IntLit(3)],
+        &[TokenType::IntLit(12), TokenType::IntLit(34), TokenType::Plus, TokenType::Minus, TokenType::IntLit(56), TokenType::Star, TokenType::Slash, TokenType::Minus, TokenType::Minus, TokenType::IntLit(8), TokenType::Plus, TokenType::Star, TokenType::IntLit(2)],
+        &[TokenType::IntLit(23), TokenType::Plus, TokenType::IntLit(18), TokenType::Minus, TokenType::IntLit(45)],
     ];
 
     fn get_test_file(filename: &str) -> PathBuf {
@@ -532,11 +561,11 @@ mod tests {
     #[case::input01(get_test_file(TEST_DATA_FILES[0]), EXPECTED_TOKENS[0])]
     #[case::input02(get_test_file(TEST_DATA_FILES[1]), EXPECTED_TOKENS[1])]
     #[case::input03(get_test_file(TEST_DATA_FILES[2]), EXPECTED_TOKENS[2])]
-    fn test_scanner_success(#[case] file: PathBuf, #[case] expected: &[Token]) {
+    fn test_scanner_success(#[case] file: PathBuf, #[case] expected: &[TokenType]) {
         let file = std::fs::File::open(file).expect("Failed to open test file");
         let scanner = Scanner::new(file);
 
-        let tokens: Vec<Token> = ScannerIter::new(scanner).collect();
+        let tokens: Vec<TokenType> = ScannerIter::new(scanner).map(|t| t.ttype).collect();
 
         assert_eq!(tokens, expected.to_vec());
     }
@@ -548,60 +577,60 @@ mod tests {
         let file = std::fs::File::open(file).expect("Failed to open test file");
         let scanner = Scanner::new(file);
 
-        let _: Vec<Token> = ScannerIter::new(scanner).collect();
+        let _: Vec<TokenType> = ScannerIter::new(scanner).map(|t| t.ttype).collect();
     }
 
     // --- multi-char comparison operators ---
 
     #[test]
     fn scan_double_eq() {
-        assert_eq!(scan_all_mem("=="), vec![Token::EQ]);
+        assert_eq!(to_vec_tokentype(scan_all_mem("==")), vec![TokenType::EQ]);
     }
 
     #[test]
     fn scan_ne() {
-        assert_eq!(scan_all_mem("!="), vec![Token::NE]);
+        assert_eq!(to_vec_tokentype(scan_all_mem("!=")), vec![TokenType::NE]);
     }
 
     #[test]
     fn scan_le() {
-        assert_eq!(scan_all_mem("<="), vec![Token::LE]);
+        assert_eq!(to_vec_tokentype(scan_all_mem("<=")), vec![TokenType::LE]);
     }
 
     #[test]
     fn scan_ge() {
-        assert_eq!(scan_all_mem(">="), vec![Token::GE]);
+        assert_eq!(to_vec_tokentype(scan_all_mem(">=")), vec![TokenType::GE]);
     }
 
     #[test]
     fn scan_single_char_lt_and_gt() {
-        assert_eq!(scan_all_mem("<"), vec![Token::LT]);
-        assert_eq!(scan_all_mem(">"), vec![Token::GT]);
+        assert_eq!(to_vec_tokentype(scan_all_mem("<")), vec![TokenType::LT]);
+        assert_eq!(to_vec_tokentype(scan_all_mem(">")), vec![TokenType::GT]);
     }
 
     // --- braces and parens ---
 
     #[test]
     fn scan_braces_and_parens() {
-        assert_eq!(scan_all_mem("{"), vec![Token::LeftBrace]);
-        assert_eq!(scan_all_mem("}"), vec![Token::RightBrace]);
-        assert_eq!(scan_all_mem("("), vec![Token::LeftParen]);
-        assert_eq!(scan_all_mem(")"), vec![Token::RightParen]);
+        assert_eq!(to_vec_tokentype(scan_all_mem("{")), vec![TokenType::LeftBrace]);
+        assert_eq!(to_vec_tokentype(scan_all_mem("}")), vec![TokenType::RightBrace]);
+        assert_eq!(to_vec_tokentype(scan_all_mem("(")), vec![TokenType::LeftParen]);
+        assert_eq!(to_vec_tokentype(scan_all_mem(")")), vec![TokenType::RightParen]);
     }
 
     // --- keywords ---
 
     #[test]
     fn scan_keywords() {
-        assert_eq!(scan_all_mem("char"), vec![Token::Char]);
-        assert_eq!(scan_all_mem("else"), vec![Token::Else]);
-        assert_eq!(scan_all_mem("for"), vec![Token::For]);
-        assert_eq!(scan_all_mem("if"), vec![Token::If]);
-        assert_eq!(scan_all_mem("int"), vec![Token::Int]);
-        assert_eq!(scan_all_mem("long"), vec![Token::Long]);
-        assert_eq!(scan_all_mem("return"), vec![Token::Return]);
-        assert_eq!(scan_all_mem("void"), vec![Token::Void]);
-        assert_eq!(scan_all_mem("while"), vec![Token::While]);
+        assert_eq!(to_vec_tokentype(scan_all_mem("char")), vec![TokenType::Char]);
+        assert_eq!(to_vec_tokentype(scan_all_mem("else")), vec![TokenType::Else]);
+        assert_eq!(to_vec_tokentype(scan_all_mem("for")), vec![TokenType::For]);
+        assert_eq!(to_vec_tokentype(scan_all_mem("if")), vec![TokenType::If]);
+        assert_eq!(to_vec_tokentype(scan_all_mem("int")), vec![TokenType::Int]);
+        assert_eq!(to_vec_tokentype(scan_all_mem("long")), vec![TokenType::Long]);
+        assert_eq!(to_vec_tokentype(scan_all_mem("return")), vec![TokenType::Return]);
+        assert_eq!(to_vec_tokentype(scan_all_mem("void")), vec![TokenType::Void]);
+        assert_eq!(to_vec_tokentype(scan_all_mem("while")), vec![TokenType::While]);
     }
 
     // --- Scanner helper methods ---
@@ -609,15 +638,15 @@ mod tests {
     #[test]
     fn matches_succeeds_on_correct_token() {
         let scanner = Scanner::new(Cursor::new(b"+".to_vec()));
-        let tok = scanner.matches(Token::Plus, "+");
-        assert_eq!(tok, Token::Plus);
+        let tok = scanner.matches(TokenType::Plus, "+");
+        assert_eq!(tok.ttype, TokenType::Plus);
     }
 
     #[test]
     #[should_panic]
     fn matches_panics_on_wrong_token() {
         let scanner = Scanner::new(Cursor::new(b"-".to_vec()));
-        scanner.matches(Token::Plus, "+");
+        scanner.matches(TokenType::Plus, "+");
     }
 
     #[test]
@@ -629,21 +658,21 @@ mod tests {
     #[test]
     fn maybe_token_true_consumes_token() {
         let scanner = Scanner::new(Cursor::new(b"+".to_vec()));
-        assert!(scanner.maybe_token(Token::Plus));
+        assert!(scanner.maybe_token(TokenType::Plus));
         assert!(scanner.scan().is_none());
     }
 
     #[test]
     fn maybe_token_false_puts_back_token() {
         let scanner = Scanner::new(Cursor::new(b"+".to_vec()));
-        assert!(!scanner.maybe_token(Token::Minus));
-        assert_eq!(scanner.scan(), Some(Token::Plus));
+        assert!(!scanner.maybe_token(TokenType::Minus));
+        assert_eq!(scanner.scan().map(|t| t.ttype), Some(TokenType::Plus));
     }
 
     #[test]
     fn is_eof_false_with_putback_token() {
         let scanner = Scanner::new(Cursor::new(b"".to_vec()));
-        scanner.putback_token(Token::Semi);
+        scanner.putback_token(Token { line: 1, col: 1, ttype: TokenType::Semi });
         assert!(!scanner.is_eof());
     }
 

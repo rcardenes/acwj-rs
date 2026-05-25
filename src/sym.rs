@@ -2,7 +2,7 @@ use std::{
     cell::{Ref, RefCell},
     iter::Iterator,
 };
-use crate::scan::Token;
+use crate::scan::TokenType;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StructuralType {
@@ -44,21 +44,21 @@ impl PrimType {
     }
 }
 
-impl From<Token> for PrimType {
-    fn from(tok: Token) -> Self {
+impl From<TokenType> for PrimType {
+    fn from(tok: TokenType) -> Self {
         match tok {
-            Token::Char => PrimType::Char,
-            Token::Int => PrimType::Int,
-            Token::Long => PrimType::Long,
-            Token::Void => PrimType::Void,
+            TokenType::Char => PrimType::Char,
+            TokenType::Int => PrimType::Int,
+            TokenType::Long => PrimType::Long,
+            TokenType::Void => PrimType::Void,
             // It's bothersome to list them all, but at this point I want to catch new types
 
-            Token::Plus|Token::Minus|Token::Star|Token::Slash
-                |Token::EQ|Token::NE|Token::LT|Token::GT|Token::LE|Token::GE
-                |Token::Assign|Token::Ident(_)|Token::IntLit(_)
-                |Token::LeftBrace|Token::RightBrace|Token::LeftParen|Token::RightParen 
-                |Token::If|Token::Else|Token::For|Token::While
-                |Token::Semi|Token::Return|Token::Amper|Token::LogAnd
+            TokenType::Plus|TokenType::Minus|TokenType::Star|TokenType::Slash
+                |TokenType::EQ|TokenType::NE|TokenType::LT|TokenType::GT|TokenType::LE|TokenType::GE
+                |TokenType::Assign|TokenType::Ident(_)|TokenType::IntLit(_)
+                |TokenType::LeftBrace|TokenType::RightBrace|TokenType::LeftParen|TokenType::RightParen 
+                |TokenType::If|TokenType::Else|TokenType::For|TokenType::While
+                |TokenType::Semi|TokenType::Return|TokenType::Amper|TokenType::LogAnd
                 // TODO: This needs to provide at least a line number
                 => panic!("No type for token {:?}", tok)
         }
@@ -228,7 +228,7 @@ impl SymbolTable {
     }
 
     pub fn has_global(&self, name: &str) -> bool {
-        self.globals.borrow().iter().position(|e| e.name == name).is_some()
+        self.globals.borrow().iter().any(|e| e.name == name)
     }
 }
 
@@ -349,32 +349,32 @@ mod tests {
         PrimType::Char.value_at();
     }
 
-    // --- PrimType::from(Token) ---
+    // --- PrimType::from(TokenType) ---
 
     #[test]
     fn prim_from_char_token() {
-        assert_eq!(PrimType::from(Token::Char), PrimType::Char);
+        assert_eq!(PrimType::from(TokenType::Char), PrimType::Char);
     }
 
     #[test]
     fn prim_from_int_token() {
-        assert_eq!(PrimType::from(Token::Int), PrimType::Int);
+        assert_eq!(PrimType::from(TokenType::Int), PrimType::Int);
     }
 
     #[test]
     fn prim_from_long_token() {
-        assert_eq!(PrimType::from(Token::Long), PrimType::Long);
+        assert_eq!(PrimType::from(TokenType::Long), PrimType::Long);
     }
 
     #[test]
     fn prim_from_void_token() {
-        assert_eq!(PrimType::from(Token::Void), PrimType::Void);
+        assert_eq!(PrimType::from(TokenType::Void), PrimType::Void);
     }
 
     #[test]
     #[should_panic(expected = "No type for token")]
     fn prim_from_non_type_token_panics() {
-        let _: PrimType = Token::Semi.into();
+        let _: PrimType = TokenType::Semi.into();
     }
 
     // --- SymbolTable function label/type operations ---

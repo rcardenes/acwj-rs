@@ -3,7 +3,8 @@ use anyhow::{Result, bail};
 use crate::{
     ast::AstNode,
     cgen::{CodeBackend, CodeGenerator},
-    scan::{Scanner, Token},
+    misc::{fatal_other, fatal_pos, fatal_tok},
+    scan::{Scanner, Token, TokenType},
     sym::{PrimType, SymbolEntry, SymbolTable},
 };
 
@@ -18,29 +19,29 @@ type Precedence = i16;
 
 /// Return numeric precence for the different tokens, so that we
 /// can use it in a Pratt-style parser.
-fn op_precedence(line: usize, token: &Token) -> Result<Precedence> {
+fn op_precedence(line: usize, token: &TokenType) -> Result<Precedence> {
     Ok(match token {
-        Token::Plus|Token::Minus => 10,
-        Token::Star|Token::Slash => 20,
-        Token::EQ|Token::NE => 30,
-        Token::LT|Token::LE|Token::GT|Token::GE => 40,
+        TokenType::Plus|TokenType::Minus => 10,
+        TokenType::Star|TokenType::Slash => 20,
+        TokenType::EQ|TokenType::NE => 30,
+        TokenType::LT|TokenType::LE|TokenType::GT|TokenType::GE => 40,
         _  => {
             bail!("syntax error on line {}, token {:?}", line, token)
         }
     })
 }
 
-fn is_arithop(token: &Token) -> bool {
-    matches!(token, Token::Plus
-            |Token::Minus
-            |Token::Star
-            |Token::Slash
-            |Token::EQ
-            |Token::NE
-            |Token::LT
-            |Token::LE
-            |Token::GT
-            |Token::GE)
+fn is_arithop(token: &TokenType) -> bool {
+    matches!(token, TokenType::Plus
+            |TokenType::Minus
+            |TokenType::Star
+            |TokenType::Slash
+            |TokenType::EQ
+            |TokenType::NE
+            |TokenType::LT
+            |TokenType::LE
+            |TokenType::GT
+            |TokenType::GE)
 }
 
 pub struct ExpressionGenerator<'a, T, B>
@@ -120,16 +121,19 @@ impl<'a, T, B> ExpressionGenerator<'a, T, B>
         }
     }
 
-    pub fn function_call(&self, id: &str) -> Result<AstNode> {
+    pub fn function_call(&self, token: Token) -> Result<AstNode> {
         // Check that the symbol has been declared.
         // TODO: Add structural type test
+        let Token { ttype: TokenType::Ident(id), .. } = &token else { unreachable!("We only get here passing an ident") };
+
         if let Some(sym) = self.sym_table.find_glob(id) {
             let expr = self.binexpr(0)?;
             self.scanner.rparen();
 
             Ok(AstNode::make_function_call(id, expr, sym.dtype))
         } else {
-            self.scanner.fatal_extra("Undeclared function", id)
+            let id = id.clone();
+            fatal_other("Undeclared function", token, id)
         }
     }
 
@@ -139,25 +143,26 @@ impl<'a, T, B> ExpressionGenerator<'a, T, B>
         // Otherwise, a syntax error for any other token type
 
         if let Some(token) = self.scanner.scan() {
-            match &token {
+            match &token.ttype {
                 // For an IntLit token, make it a Char if it is within that type's range,
                 // so that we don't have to narrow it later if needed. Widen the data is
                 // always possible.
-                Token::IntLit(val) => if *val >= 0 && *val < 256 {
+                TokenType::IntLit(val) => if *val >= 0 && *val < 256 {
                     Ok(AstNode::make_intlit(*val, PrimType::Char))
                 } else {
                     Ok(AstNode::make_intlit(*val, PrimType::Int))
                 },
-                Token::Ident(id) => {
-                    if self.scanner.maybe_token(Token::LeftParen) {
-                        self.function_call(id.as_str())
+                TokenType::Ident(id) => {
+                    if self.scanner.maybe_token(TokenType::LeftParen) {
+                        self.function_call(token)
                     } else if let Some(sym) = self.sym_table.find_glob(id) {
                         Ok(AstNode::make_ident(id, sym.dtype))
                     } else {
-                        self.scanner.fatal_extra("Unknown variable", id)
+                        let id = id.clone();
+                        fatal_other("Unknown variable", token, id)
                     }
                 },
-                _ => self.scanner.fatal_extra("Syntax error, token", token)
+                _ => fatal_tok("Syntax error, token", token)
             }
         } else {
             panic!("EOF reached, expected an integer")
@@ -166,11 +171,11 @@ impl<'a, T, B> ExpressionGenerator<'a, T, B>
 
     fn prefix(&self) -> Result<AstNode> {
         if let Some(token) = self.scanner.scan() {
-            match token {
-                Token::Amper => {
+            match &token.ttype {
+                TokenType::Amper => {
                     Ok(self.prefix()?.into_pointer("& operator must be followed by an identifier"))
                 },
-                Token::Star => {
+                TokenType::Star => {
                     Ok(self.prefix()?.make_deref("* operator must be followed by an identifier or *"))
                 },
                 _ => {
@@ -191,12 +196,12 @@ impl<'a, T, B> ExpressionGenerator<'a, T, B>
         let mut left = self.prefix()?;
 
         while let Some(token) = self.scanner.scan() {
-            if !is_arithop(&token) {
+            if !is_arithop(&token.ttype) {
                 self.scanner.putback_token(token);
                 break;
             }
 
-            let curr_prec = op_precedence(self.scanner.get_line(), &token)?;
+            let curr_prec = op_precedence(self.scanner.get_line(), &token.ttype)?;
             if curr_prec <= ptp {
                 self.scanner.putback_token(token);
                 break;
@@ -210,7 +215,7 @@ impl<'a, T, B> ExpressionGenerator<'a, T, B>
             };
 
             let bin_type = match compat {
-                Compatibility::Incompatible => self.scanner.fatal("Incompatible types"),
+                Compatibility::Incompatible => fatal_pos("Incompatible types", token),
                 Compatibility::WidenLeft(t) => {
                     // Widen the left branch
                     left = left.new_type(t);
@@ -224,9 +229,9 @@ impl<'a, T, B> ExpressionGenerator<'a, T, B>
                 Compatibility::Compatible(t) => t, // Do nothing for full compatibility
             };
 
-            left = match token {
-                Token::Plus|Token::Minus|Token::Star|Token::Slash|Token::EQ|Token::NE|Token::LT|Token::LE|Token::GT|Token::GE => {
-                    AstNode::make_binary(token, left, right, bin_type)
+            left = match token.ttype {
+                TokenType::Plus|TokenType::Minus|TokenType::Star|TokenType::Slash|TokenType::EQ|TokenType::NE|TokenType::LT|TokenType::LE|TokenType::GT|TokenType::GE => {
+                    AstNode::make_binary(token.ttype, left, right, bin_type)
                 }
                 _ => unreachable!("This shouldn't be reachable after we tested the op to be arithmetic")
             };
@@ -326,7 +331,7 @@ mod tests {
     #[rstest]
     fn binexpr_addition_builds_correct_tree(#[with("3 + 5")] testfr: TestFramework) {
         let tree = testfr.binexpr(0).expect("Expected a clean parsing");
-        assert_eq!(tree, AstNode::make_binary(Token::Plus,
+        assert_eq!(tree, AstNode::make_binary(TokenType::Plus,
                                               AstNode::make_intlit(3, PrimType::Char),
                                               AstNode::make_intlit(5, PrimType::Char),
                                               PrimType::Char));
@@ -337,8 +342,8 @@ mod tests {
     fn binexpr_equal_precedence_is_left_associative(#[with("2 - 3 + 5")] testfr: TestFramework) {
         let tree = testfr.binexpr(0).expect("Expected a clean parsing");
         assert_eq!(tree,
-            AstNode::make_binary(Token::Plus,
-                AstNode::make_binary(Token::Minus,
+            AstNode::make_binary(TokenType::Plus,
+                AstNode::make_binary(TokenType::Minus,
                                      AstNode::make_intlit(2, PrimType::Char),
                                      AstNode::make_intlit(3, PrimType::Char),
                                      PrimType::Char),
@@ -352,39 +357,39 @@ mod tests {
     fn op_precedence_returns_correct_values() {
         let s = scanner_from("");
         let line = s.get_line();
-        assert_eq!(op_precedence(line, &Token::Plus).unwrap(), 10);
-        assert_eq!(op_precedence(line, &Token::Minus).unwrap(), 10);
-        assert_eq!(op_precedence(line, &Token::Star).unwrap(), 20);
-        assert_eq!(op_precedence(line, &Token::Slash).unwrap(), 20);
-        assert_eq!(op_precedence(line, &Token::EQ).unwrap(), 30);
-        assert_eq!(op_precedence(line, &Token::NE).unwrap(), 30);
-        assert_eq!(op_precedence(line, &Token::LT).unwrap(), 40);
-        assert_eq!(op_precedence(line, &Token::LE).unwrap(), 40);
-        assert_eq!(op_precedence(line, &Token::GT).unwrap(), 40);
-        assert_eq!(op_precedence(line, &Token::GE).unwrap(), 40);
+        assert_eq!(op_precedence(line, &TokenType::Plus).unwrap(), 10);
+        assert_eq!(op_precedence(line, &TokenType::Minus).unwrap(), 10);
+        assert_eq!(op_precedence(line, &TokenType::Star).unwrap(), 20);
+        assert_eq!(op_precedence(line, &TokenType::Slash).unwrap(), 20);
+        assert_eq!(op_precedence(line, &TokenType::EQ).unwrap(), 30);
+        assert_eq!(op_precedence(line, &TokenType::NE).unwrap(), 30);
+        assert_eq!(op_precedence(line, &TokenType::LT).unwrap(), 40);
+        assert_eq!(op_precedence(line, &TokenType::LE).unwrap(), 40);
+        assert_eq!(op_precedence(line, &TokenType::GT).unwrap(), 40);
+        assert_eq!(op_precedence(line, &TokenType::GE).unwrap(), 40);
     }
 
     #[test]
     fn op_precedence_fails_on_non_operator() {
-        assert!(op_precedence(1, &Token::Semi).is_err());
-        assert!(op_precedence(1, &Token::IntLit(1)).is_err());
+        assert!(op_precedence(1, &TokenType::Semi).is_err());
+        assert!(op_precedence(1, &TokenType::IntLit(1)).is_err());
     }
 
     // --- is_arithop ---
 
     #[test]
     fn is_arithop_true_for_all_operator_tokens() {
-        for tok in &[Token::Plus, Token::Minus, Token::Star, Token::Slash,
-                     Token::EQ, Token::NE, Token::LT, Token::LE, Token::GT, Token::GE] {
+        for tok in &[TokenType::Plus, TokenType::Minus, TokenType::Star, TokenType::Slash,
+                     TokenType::EQ, TokenType::NE, TokenType::LT, TokenType::LE, TokenType::GT, TokenType::GE] {
             assert!(is_arithop(tok), "{tok:?} should be an arith op");
         }
     }
 
     #[test]
     fn is_arithop_false_for_non_operators() {
-        assert!(!is_arithop(&Token::IntLit(1)));
-        assert!(!is_arithop(&Token::Semi));
-        assert!(!is_arithop(&Token::Ident("x".into())));
+        assert!(!is_arithop(&TokenType::IntLit(1)));
+        assert!(!is_arithop(&TokenType::Semi));
+        assert!(!is_arithop(&TokenType::Ident("x".into())));
     }
 
     // --- binexpr with comparisons ---
@@ -393,7 +398,7 @@ mod tests {
     fn binexpr_equality_comparison_builds_equal_root(#[with("3 == 5")] testfr: TestFramework) {
         let tree = testfr.binexpr(0).expect("Expected a clean parsing");
 
-        assert_eq!(tree, AstNode::make_binary(Token::EQ,
+        assert_eq!(tree, AstNode::make_binary(TokenType::EQ,
                                               AstNode::make_intlit(3, PrimType::Char),
                                               AstNode::make_intlit(5, PrimType::Char),
                                               PrimType::Char));

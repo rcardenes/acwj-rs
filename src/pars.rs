@@ -1,9 +1,10 @@
 use anyhow::{Result, bail};
 use crate::{
     ast::AstNode,
-    expr::{Compatibility, ExpressionGenerator},
-    scan::{Scanner, Token},
     cgen::{CodeBackend, CodeGenerator},
+    expr::{Compatibility, ExpressionGenerator},
+    misc::{fatal_pos, fatal_tok},
+    scan::{Scanner, TokenType},
     sym::{PrimType, StructuralType, SymbolTable},
 };
 
@@ -41,9 +42,9 @@ where T: std::io::Read,
         Ok(tree)
     }
 
-    fn var_declaration(&self, type_token: Token) -> Result<AstNode> {
+    fn var_declaration(&self, type_token: TokenType) -> Result<AstNode> {
         let mut dtype = PrimType::from(type_token);
-        while self.scanner.maybe_token(Token::Star) {
+        while self.scanner.maybe_token(TokenType::Star) {
             dtype = dtype.pointer_to();
         }
 
@@ -83,7 +84,7 @@ where T: std::io::Read,
 
         let true_branch = self.compound_statement()?;
 
-        let false_branch = if self.scanner.maybe_token(Token::Else) {
+        let false_branch = if self.scanner.maybe_token(TokenType::Else) {
             Some(self.compound_statement()?)
         } else {
             None
@@ -137,10 +138,10 @@ where T: std::io::Read,
     pub fn function_declaration(&self) -> Result<Option<AstNode>> {
         if let Some(t) = self.scanner.scan() {
             if !t.is_type() {
-                bail!("Expected function declaration, found {}", t);
+                fatal_tok("Expected function declaration", t)
             }
 
-            let ftype: PrimType = t.into();
+            let ftype: PrimType = t.ttype.into();
             let ident = self.scanner.ident(None);
             let name = AstNode::make_ident(&ident, ftype);
             self.symbols.add_glob_fn(&ident, ftype);
@@ -190,57 +191,54 @@ where T: std::io::Read,
     }
 
     pub fn single_statement(&self) -> Result<AstNode> {
-        match self.scanner.scan() {
-            Some(t @ Token::Int
-                |t @ Token::Char
-                |t @ Token::Long) => self.var_declaration(t),
-            Some(Token::Ident(id)) => {
-                if self.scanner.maybe_token(Token::Assign) {
-                    self.assignment_statement(id)
-                } else if self.scanner.maybe_token(Token::LeftParen) {
-                    self.expr.function_call(id.as_str())
+        let token = self.scanner.scan().expect("EOF found while expecting a statement");
+        match &token.ttype {
+            t @ TokenType::Int
+            |t @ TokenType::Char
+            |t @ TokenType::Long => self.var_declaration(t.clone()),
+            TokenType::Ident(id) => {
+                if self.scanner.maybe_token(TokenType::Assign) {
+                    self.assignment_statement(id.to_string())
+                } else if self.scanner.maybe_token(TokenType::LeftParen) {
+                    self.expr.function_call(token)
+                } else if let Some(next) = self.scanner.scan() {
+                        fatal_tok("Expected assignment or function call", next)
                 } else {
-                    if let Some(next) = self.scanner.scan() {
-                        self.scanner.fatal_extra("Expected assignment or function call, not", next)
-                    } else {
-                        self.scanner.fatal("EOF while parsing expression")
-                    }
+                    panic!("EOF while parsing expression")
                 }
             },
-            Some(Token::If) => self.if_statement(),
-            Some(Token::For) => self.for_statement(),
-            Some(Token::While) => self.while_statement(),
-            Some(Token::Return) => self.return_statement(),
-            Some(t @ Token::Else
-                |t @ Token::LeftBrace
-                |t @ Token::LeftParen
-                |t @ Token::RightParen)
+            TokenType::If => self.if_statement(),
+            TokenType::For => self.for_statement(),
+            TokenType::While => self.while_statement(),
+            TokenType::Return => self.return_statement(),
+            t @ TokenType::Else
+            |t @ TokenType::LeftBrace
+            |t @ TokenType::LeftParen
+            |t @ TokenType::RightParen
                 => bail!("Syntax error, token {}, at line {}", t, self.scanner.get_line()),
-            Some(t @ Token::Plus
-                |t @ Token::Minus
-                |t @ Token::Star
-                |t @ Token::Slash
-                |t @ Token::Assign
-                |t @ Token::EQ
-                |t @ Token::NE
-                |t @ Token::GT
-                |t @ Token::GE
-                |t @ Token::LT
-                |t @ Token::LE
-                |t @ Token::LogAnd) =>
-            {
-                bail!("Found operator {:?} while expecting a statement, at line {}", t, self.scanner.get_line())
+            TokenType::Plus
+            |TokenType::Minus
+            |TokenType::Star
+            |TokenType::Slash
+            |TokenType::Assign
+            |TokenType::EQ
+            |TokenType::NE
+            |TokenType::GT
+            |TokenType::GE
+            |TokenType::LT
+            |TokenType::LE
+            |TokenType::LogAnd => {
+                fatal_tok("Found operator while expecting a statement", token)
             },
-            Some(Token::IntLit(_)) => {
-                bail!("Found integer while expecting a statement, at line {}", self.scanner.get_line())
+            TokenType::IntLit(_) => {
+                fatal_pos("Found integer while expecting a statement", token)
             }
-            Some(Token::RightBrace) => panic!("Expected statement, found '}}'"),
-            // A semicolon on its own equals an empty statement
-            Some(Token::Semi) => panic!("Expected statement, found ';'"),
+            TokenType::RightBrace
+            // A semicolon on its own equals an empty statement (let's fail it for now...)
+            | TokenType::Semi
             // Only for function declarations right now
-            Some(Token::Void) => panic!("Expected statement, found 'void'"),
-            Some(Token::Amper) => panic!("Expected statement, found '&'"),
-            None => { panic!("EOF found while expecting a statement") },
+            | TokenType::Void
+            | TokenType::Amper => fatal_tok("Expected statement", token),
         }
     }
 
@@ -250,9 +248,9 @@ where T: std::io::Read,
         let mut left = AstNode::Empty;
 
         while !self.scanner.is_eof() {
-            if self.scanner.maybe_token(Token::RightBrace) {
+            if self.scanner.maybe_token(TokenType::RightBrace) {
                 return Ok(left);
-            } else if self.scanner.maybe_token(Token::Semi) {
+            } else if self.scanner.maybe_token(TokenType::Semi) {
                 // Empty statement
                 continue
             }
@@ -383,7 +381,7 @@ mod tests {
         let parser = Parser::new(&scanner, &symbols, &code_gen);
         let tree = parser.compound_statement().expect("parse failed");
         assert_eq!(tree, AstNode::make_if(
-            AstNode::make_binary(Token::LT, AstNode::make_intlit(1, PrimType::Char), AstNode::make_intlit(2, PrimType::Char), PrimType::Char),
+            AstNode::make_binary(TokenType::LT, AstNode::make_intlit(1, PrimType::Char), AstNode::make_intlit(2, PrimType::Char), PrimType::Char),
             AstNode::make_function_call("printint", AstNode::make_intlit(42, PrimType::Char), PrimType::Void),
             None,
         ));
@@ -398,7 +396,7 @@ mod tests {
         let parser = Parser::new(&scanner, &symbols, &code_gen);
         let tree = parser.compound_statement().expect("parse failed");
         assert_eq!(tree, AstNode::make_if(
-            AstNode::make_binary(Token::LT, AstNode::make_intlit(1, PrimType::Char), AstNode::make_intlit(2, PrimType::Char), PrimType::Char),
+            AstNode::make_binary(TokenType::LT, AstNode::make_intlit(1, PrimType::Char), AstNode::make_intlit(2, PrimType::Char), PrimType::Char),
             AstNode::make_function_call("printint", AstNode::make_intlit(1, PrimType::Char), PrimType::Void),
             Some(AstNode::make_function_call("printint", AstNode::make_intlit(2, PrimType::Char), PrimType::Void)),
         ));
@@ -411,7 +409,7 @@ mod tests {
         let parser = Parser::new(&scanner, &symbols, &code_gen);
         let tree = parser.compound_statement().expect("parse failed");
         assert_eq!(tree, AstNode::make_while(
-            AstNode::make_binary(Token::LT, AstNode::make_intlit(1, PrimType::Char), AstNode::make_intlit(2, PrimType::Char), PrimType::Char),
+            AstNode::make_binary(TokenType::LT, AstNode::make_intlit(1, PrimType::Char), AstNode::make_intlit(2, PrimType::Char), PrimType::Char),
             AstNode::make_function_call("printint", AstNode::make_intlit(42, PrimType::Char), PrimType::Void),
         ));
     }
@@ -428,7 +426,7 @@ mod tests {
         assert_eq!(tree, AstNode::make_glue(
             AstNode::make_function_call("printint", AstNode::make_intlit(1, PrimType::Char), PrimType::Void),
             AstNode::make_while(
-                AstNode::make_binary(Token::LT, AstNode::make_intlit(1, PrimType::Char), AstNode::make_intlit(2, PrimType::Char), PrimType::Char),
+                AstNode::make_binary(TokenType::LT, AstNode::make_intlit(1, PrimType::Char), AstNode::make_intlit(2, PrimType::Char), PrimType::Char),
                 AstNode::make_glue(
                     AstNode::make_function_call("printint", AstNode::make_intlit(42, PrimType::Char), PrimType::Void),
                     AstNode::make_function_call("printint", AstNode::make_intlit(3, PrimType::Char), PrimType::Void),
@@ -450,11 +448,11 @@ mod tests {
         let while_stmt = AstNode::make_glue(
             AstNode::make_assign(AstNode::make_lvident("i", PrimType::Char), AstNode::make_intlit(0, PrimType::Char)),
             AstNode::make_while(
-                AstNode::make_binary(Token::LT, AstNode::make_ident("i", PrimType::Char), AstNode::make_intlit(5, PrimType::Char), PrimType::Char),
+                AstNode::make_binary(TokenType::LT, AstNode::make_ident("i", PrimType::Char), AstNode::make_intlit(5, PrimType::Char), PrimType::Char),
                 AstNode::make_glue(
                     AstNode::Empty,
                     AstNode::make_assign(AstNode::make_lvident("i", PrimType::Char),
-                            AstNode::make_binary(Token::Plus, AstNode::make_ident("i", PrimType::Char),
+                            AstNode::make_binary(TokenType::Plus, AstNode::make_ident("i", PrimType::Char),
                                                               AstNode::make_intlit(1, PrimType::Char),
                                                               PrimType::Char))
                 ),
